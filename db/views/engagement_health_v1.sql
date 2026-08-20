@@ -2,15 +2,23 @@
 --
 --   psql "$BIZDATA_DSN" -f db/views/engagement_health_v1.sql
 --
--- Requires db/seeds/scoring_weights.sql to have been applied first. scripts/seed.py
--- does both, in that order, after the generated tables are loaded — db/schema.sql drops
--- the six tables with CASCADE, which takes these views with them.
---
--- Three views, bottom-up:
+-- Last in the chain. Requires, in order, db/seeds/scoring_weights.sql,
+-- portfolio_coverage_v1, engagement_burn_v1 and engagement_financials_v1;
+-- scripts/seed.py applies all of them after every load, because db/schema.sql drops the
+-- six tables with CASCADE and that takes every view with them.
 --
 --   portfolio_coverage_v1              one row per week, firm-wide
---   engagement_health_components_v1    one row per engagement per period per component
---   engagement_health_v1               one row per engagement per period
+--   engagement_burn_v1                 engagement x period, measured
+--   engagement_financials_v1           engagement x period, billed
+--   engagement_health_components_v1    engagement x period x component   <- here
+--   engagement_health_v1               engagement x period               <- and here
+--
+-- At step 2 this file held the whole chain. At step 3 the measurement half moved out,
+-- because get_engagement_burn and get_financials need the same trailing run rate, the
+-- same margin and the same DSO that the components below are scored from, and two
+-- definitions of a run rate is a tool and a score that disagree in front of a partner.
+-- What stayed here is the only thing that was ever specific to scoring: the mapping from
+-- a measurement to a risk, and the weighted sum of those risks.
 --
 -- The line this file holds, and it is the point of putting the score in SQL at all: the
 -- score and the band are a measurement. What to *do* about a score — RED versus NEEDS
@@ -20,86 +28,6 @@
 -- Neither does anything below reconcile burn against margin. Mess case 4 is a fixed-fee
 -- engagement at negative margin whose burn looks fine, and both components scoring it
 -- independently is the correct behaviour. An agreement between them would be invented.
-
-
--- --------------------------------------------------------------------------------------
--- portfolio_coverage_v1
---
--- Whether a given week can be read at all, which is a different question from whether
--- the work went well. Mess case 7 empties a week firm-wide — an offsite, or the tracker
--- being down — and the naive read is that portfolio delivery collapsed.
---
--- This lives here rather than at step 3 because the run rate below has to exclude that
--- week, and get_time_summary's data_completeness block needs the same numbers. One
--- definition, two consumers.
---
--- Excluding an unreadable week from a run rate is a measurement correction: the data is
--- not there to average. It is not the step-6 rule about never calling that week a
--- delivery slowdown, which stays in assemble-delivery-pack.
--- --------------------------------------------------------------------------------------
-
-create or replace view portfolio_coverage_v1 as
-with bounds as (
-    select min(entry_date) as first_day, max(entry_date) as last_day
-    from time_entries
-),
-
-weeks as (
-    select
-        w::date                          as week_start,
-        (w + interval '6 days')::date    as week_end
-    from bounds b
-    cross join generate_series(
-        date_trunc('week', b.first_day::timestamp),
-        date_trunc('week', b.last_day::timestamp),
-        interval '1 week'
-    ) w
-),
-
--- The denominator is the engagements that were contractually live that week, not a flat
--- count of everything marked active. An engagement that had not started yet cannot fail
--- to report, and counting it would make the opening weeks of the window look like
--- coverage gaps and drag every run rate that reads them.
-live as (
-    select k.week_start, count(*) as engagements_active
-    from weeks k
-    join engagements e
-      on e.status = 'active'
-     and e.start_date <= k.week_end
-     and e.end_date   >= k.week_start
-    group by k.week_start
-),
-
-reporting as (
-    select k.week_start, count(distinct t.engagement_id) as engagements_reporting
-    from weeks k
-    join time_entries t on t.entry_date between k.week_start and k.week_end
-    join engagements e  on e.id = t.engagement_id and e.status = 'active'
-    group by k.week_start
-)
-
-select
-    k.week_start,
-    k.week_end,
-    coalesce(l.engagements_active, 0)     as engagements_active,
-    coalesce(r.engagements_reporting, 0)  as engagements_reporting,
-    case
-        when coalesce(l.engagements_active, 0) = 0 then null
-        else round(100.0 * coalesce(r.engagements_reporting, 0) / l.engagements_active, 1)
-    end as pct_active_reporting,
-
-    -- The 60% floor is the coverage rule from the decision record, and it is the one
-    -- threshold in this file that is not data. It belongs to the reading of the period
-    -- rather than to the calibration of the score: a different weighting of burn against
-    -- margin is a judgment call, whereas a week nobody filed against is unreadable at any
-    -- weighting.
-    case
-        when coalesce(l.engagements_active, 0) = 0 then false
-        else coalesce(r.engagements_reporting, 0)::numeric / l.engagements_active < 0.60
-    end as firm_wide_gap
-from weeks k
-left join live      l on l.week_start = k.week_start
-left join reporting r on r.week_start = k.week_start;
 
 
 -- --------------------------------------------------------------------------------------
@@ -121,200 +49,19 @@ with model as (
     select version from scoring_model where is_active
 ),
 
-bounds as (
-    select
-        date_trunc('month', min(entry_date))::date as first_period,
-        date_trunc('month', max(entry_date))::date as last_period
-    from time_entries
-),
-
-periods as (
-    select
-        p::date                                   as period_start,
-        (p + interval '1 month - 1 day')::date     as period_end
-    from bounds b
-    cross join generate_series(
-        b.first_period::timestamp,
-        b.last_period::timestamp,
-        interval '1 month'
-    ) p
-),
-
--- One row per engagement per month it was contractually live. as_of is where the
--- measurement stands: the period end, or the engagement's end date if that came first.
--- That least() is what stops mess case 6 — an engagement ending mid-period — from
--- reading as ten days of silence.
-grid as (
-    select
-        e.id                                as engagement_id,
-        e.client_id,
-        e.fee_type,
-        e.ceiling_hours,
-        e.ceiling_amount,
-        e.start_date,
-        e.end_date,
-        e.status,
-        pr.period_start,
-        pr.period_end,
-        least(pr.period_end, e.end_date)    as as_of
-    from engagements e
-    join periods pr
-      on e.start_date <= pr.period_end
-     and e.end_date   >= pr.period_start
-),
-
-monthly as (
-    select
-        t.engagement_id,
-        date_trunc('month', t.entry_date)::date                as period_start,
-        sum(t.hours)                                           as hours,
-        sum(t.hours * pe.cost_rate)                            as cost,
-        sum(t.hours * pe.bill_rate) filter (where t.billable)  as billable_value,
-        max(t.entry_date)                                      as last_entry_date
-    from time_entries t
-    join people pe on pe.id = t.person_id
-    group by 1, 2
-),
-
-cumulative as (
-    select
-        g.engagement_id,
-        g.period_start,
-        coalesce(sum(m.hours), 0)           as hours_to_date,
-        coalesce(sum(m.cost), 0)            as cost_to_date,
-        coalesce(sum(m.billable_value), 0)  as billable_value_to_date,
-        max(m.last_entry_date)              as last_entry_date
-    from grid g
-    left join monthly m
-      on m.engagement_id = g.engagement_id
-     and m.period_start <= g.period_start
-    group by 1, 2
-),
-
-weekly as (
-    select
-        t.engagement_id,
-        date_trunc('week', t.entry_date)::date  as week_start,
-        sum(t.hours)                            as hours
-    from time_entries t
-    group by 1, 2
-),
-
--- Materialized deliberately. Without the keyword Postgres inlines the CTE into the
--- lateral below and recomputes the whole coverage view once per engagement-month, which
--- is fifty-odd weeks of firm-wide aggregation done three hundred times and takes twenty
--- seconds. The window is about fifty rows; computing it once takes milliseconds. This
--- matters beyond tidiness — step 5 puts the tools behind an HTTP API that times out at
--- thirty seconds.
-readable_weeks as materialized (
-    select week_start, week_end
-    from portfolio_coverage_v1
-    where not firm_wide_gap
-),
-
--- The trailing four readable, complete, in-contract weeks. Readable excludes mess case
--- 7's week; complete excludes the ragged part-week at a month end, which would otherwise
--- halve the run rate of every engagement in the portfolio; in-contract stops a week
--- before kickoff counting as a week of zero delivery.
---
--- weeks_counted comes out with it, because scope-escalation's rule is that a projection
--- built on fewer than three weeks is not a projection. Below three, burn_trajectory
--- scores null rather than guessing.
-run_rate as (
-    select
-        g.engagement_id,
-        g.period_start,
-        avg(coalesce(wk.hours, 0))  as weekly_run_rate,
-        count(*)                    as weeks_counted
-    from grid g
-    cross join lateral (
-        select c.week_start
-        from readable_weeks c
-        where c.week_end   <= g.as_of
-          and c.week_start >= g.start_date
-          and c.week_start >  g.as_of - 70
-        order by c.week_start desc
-        limit 4
-    ) rw
-    left join weekly wk
-      on wk.engagement_id = g.engagement_id
-     and wk.week_start    = rw.week_start
-    group by 1, 2
-),
-
-client_paid as (
-    select
-        e.client_id,
-        i.paid_at,
-        (i.paid_at - i.issued_at) as days_to_pay
-    from invoices i
-    join engagements e on e.id = i.engagement_id
-    where i.status = 'paid'
-),
-
--- DSO against the client's own history rather than a global threshold. A client that
--- always pays on day 45 is not a risk; one that used to pay on day 10 and now pays on
--- day 40 is. Ninety days of recent behaviour against the nine months before it.
-dso as (
-    select
-        g.engagement_id,
-        g.period_start,
-        avg(cp.days_to_pay) filter (where cp.paid_at >  g.as_of - 90)  as dso_current,
-        avg(cp.days_to_pay) filter (where cp.paid_at <= g.as_of - 90)  as dso_baseline
-    from grid g
-    left join client_paid cp
-      on cp.client_id = g.client_id
-     and cp.paid_at  <= g.as_of
-     and cp.paid_at   > g.as_of - 365
-    group by 1, 2
-),
-
+-- Every measurement this view scores, already computed. The four columns below are the
+-- step-2 expressions verbatim; they simply live one view down now.
 raw as (
     select
-        g.engagement_id,
-        g.period_start,
-        g.period_end,
-        g.fee_type,
-        g.ceiling_hours,
-        g.ceiling_amount,
-        c.hours_to_date,
-        c.cost_to_date,
-        c.billable_value_to_date,
-        rr.weeks_counted,
-
-        -- Burn against the ceiling, projected forward at the trailing run rate for
-        -- however much contract is left. Never re-baselined: if actuals have already
-        -- passed the ceiling the projection stays above 1 and the denominator does not
-        -- move.
-        (c.hours_to_date
-            + coalesce(rr.weekly_run_rate, 0)
-              * greatest(0, (g.end_date - g.as_of))::numeric / 7.0
-        ) / g.ceiling_hours as projected_burn_pct,
-
-        -- Both definitions inherited from step 1 rather than re-decided here. Fixed fee
-        -- takes the fee as revenue; T&M takes billable value at rate card. Mess case 4 is
-        -- constructed against the first one and stops being a contradiction under any
-        -- other.
-        case
-            when g.fee_type = 'fixed'
-                then (g.ceiling_amount - c.cost_to_date) / g.ceiling_amount
-            when c.billable_value_to_date > 0
-                then (c.billable_value_to_date - c.cost_to_date) / c.billable_value_to_date
-        end as margin_pct,
-
-        -- Against the engagement's own start where nothing has ever been logged, so a
-        -- live engagement that has never filed a timesheet is measured rather than
-        -- excused.
-        (g.as_of - coalesce(c.last_entry_date, g.start_date))::numeric as days_since_last_entry,
-
-        case
-            when d.dso_baseline > 0 and d.dso_current is not null
-                then (d.dso_current - d.dso_baseline) / d.dso_baseline
-        end as dso_change_pct
-    from grid g
-    left join cumulative c on c.engagement_id = g.engagement_id and c.period_start = g.period_start
-    left join run_rate  rr on rr.engagement_id = g.engagement_id and rr.period_start = g.period_start
-    left join dso        d on d.engagement_id  = g.engagement_id and d.period_start  = g.period_start
+        f.engagement_id,
+        f.period_start,
+        f.period_end,
+        f.weeks_counted,
+        f.projected_burn_ratio          as projected_burn_pct,
+        f.margin_ratio                  as margin_pct,
+        f.days_since_last_entry,
+        f.payment_behaviour_change_ratio as dso_change_pct
+    from engagement_financials_v1 f
 ),
 
 -- Each raw measurement mapped onto 0..1. The calibration constants are here rather than

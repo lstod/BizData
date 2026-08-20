@@ -61,7 +61,54 @@ psql "$BIZDATA_DSN" -f db/checks/checksums.sql    # row counts and content hashe
 psql "$BIZDATA_DSN" -f db/checks/health_v1.sql    # seven rows, every ok true
 ```
 
+Those three assert things about the data. To assert them across every reserved seed at once,
+`scripts/sweep.sh /tmp/out` reseeds each in turn and writes one file per seed.
 
+## Running the MCP server
+
+```bash
+.venv/bin/uvicorn server.app:app          # http://127.0.0.1:8000/mcp
+```
+
+Four read tools, one endpoint, no session state. Every call prints one JSON line to stdout — the
+tool call log, seven fields, which is what project #2 reads and what makes "the client says the
+number is wrong" a question with an answer.
+
+```
+{"run_id":"pack-2026-08","tool":"get_engagement_burn","arguments":{...},
+ "total_count":1,"returned_count":1,"latency_ms":74.2,"scoring_model_version":"v1.0"}
+```
+
+| Tool | Answers |
+| --- | --- |
+| `list_engagements` | Every engagement live in the period with its burn and health band. Triage in one call. |
+| `get_engagement_burn` | Hours against the SOW ceiling, the trailing run rate, and a projection labelled with how far it can be trusted. |
+| `get_time_summary` | Forty thousand entries aggregated, with data quality and weekly reporting coverage alongside. |
+| `get_financials` | Invoiced, paid, unbilled work in progress, margin, and payment behaviour against the client's own history. |
+
+The tools are checked the same way the data is, as assertions rather than description:
+
+```bash
+.venv/bin/python scripts/check_tools.py            # every reserved seed, reseeding each
+.venv/bin/python scripts/check_tools.py --seed 42 -v
+```
+
+That runs the server in memory and asserts the mess cases surface through the tool surface, that
+paging reaches `total_count`, that no response approaches the 1 MiB cap the Data API imposes at step
+5, and that every call left exactly one complete log line. 177 assertions per seed.
+
+The server is stateless, which is worth knowing before hand-writing a request to it: there is no
+`initialize` handshake and no session id, and every request carries its own protocol version in
+`params._meta`. Without that envelope the server answers `400`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{
+       "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+       "io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
 
 ## Engagement health is a number, not a threshold in a prompt
 
@@ -141,8 +188,14 @@ different engagements.
 db/
   schema.sql              six tables
   seeds/                  the scoring model: weights, bands, active version
-  views/                  engagement health, portfolio coverage
+  views/                  coverage, burn, financials, health -- each reads the one above
+  sql/                    one query per tool, :name placeholders, Data API form
   checks/                 mess case assertions, determinism checksums, health assertions
+server/
+  app.py                  the MCP server; uvicorn server.app:app
+  db.py                   local Postgres now, RDS Data API at step 5
+  toollog.py              one JSON line per call, seven fields
+  tools/                  the four read tools, one module each
 infra/
   bootstrap/              Terraform state bucket and the budget alarm, local state
   main/                   everything else, S3 backend with native locking
@@ -150,6 +203,8 @@ scripts/
   seed.py                 --seed, --period; the entry point
   generator.py            the deterministic portfolio
   writers.py              local Postgres now, RDS Data API at step 5
+  check_tools.py          the tools' Done-when conditions, as assertions
+  sweep.sh                the SQL checks across every reserved seed
 docker-compose.yml        local Postgres for steps 1 to 4
 ```
 

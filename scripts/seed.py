@@ -35,14 +35,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "db" / "schema.sql"
 
 # Applied after the generated rows are in, in this order. The scoring model has to exist
-# before the views that read it, and both have to be reapplied on every run because
-# db/schema.sql drops the six tables with CASCADE, which takes the views with them.
+# before the views that read it, each view has to exist before the one that reads it, and
+# all of them have to be reapplied on every run because db/schema.sql drops the six tables
+# with CASCADE, which takes the views with them.
 #
 # These are not generated data and do not depend on --seed. They are here rather than in
-# the README as two more psql lines because a database seeded without them is a database
+# the README as five more psql lines because a database seeded without them is a database
 # where every step-3 tool fails on a missing relation.
 POST_LOAD_PATHS = (
     REPO_ROOT / "db" / "seeds" / "scoring_weights.sql",
+    REPO_ROOT / "db" / "views" / "portfolio_coverage_v1.sql",
+    REPO_ROOT / "db" / "views" / "engagement_burn_v1.sql",
+    REPO_ROOT / "db" / "views" / "engagement_financials_v1.sql",
     REPO_ROOT / "db" / "views" / "engagement_health_v1.sql",
 )
 

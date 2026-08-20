@@ -3,3 +3,13 @@
 # Python 3.12 is the version the step-5 Lambda runs; see .python-version.
 
 psycopg[binary]==3.3.4
+
+# The MCP server. v2 is the line that speaks the stateless protocol:
+# the class is MCPServer from mcp.server.mcpserver, and `pip install mcp` resolving to
+# 1.x means FastMCP, the initialize handshake and Mcp-Session-Id. Hence the exact pin
+# rather than a floor.
+mcp==2.0.0
+
+# mcp already depends on uvicorn, but the ASGI server is how this repo runs the server
+# locally, so it is a direct dependency here and pinned like one.
+uvicorn==0.52.4
