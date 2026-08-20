@@ -11,6 +11,10 @@ README usable as a comparable scorecard for project #2.
 The schema is dropped and recreated by default. Every row in this database is synthetic
 and regenerating it costs seconds, so a reset is the sane default; pass --no-schema to
 load on top of an existing schema instead.
+
+After the rows land, the scoring model in db/seeds/ and the health views in db/views/ are
+applied on every run. They are seed-independent reference objects, but the schema reset
+drops the views along with the tables they read, so reapplying is not optional.
 """
 
 from __future__ import annotations
@@ -29,6 +33,18 @@ from writers import TABLE_ORDER, get_writer  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = REPO_ROOT / "db" / "schema.sql"
+
+# Applied after the generated rows are in, in this order. The scoring model has to exist
+# before the views that read it, and both have to be reapplied on every run because
+# db/schema.sql drops the six tables with CASCADE, which takes the views with them.
+#
+# These are not generated data and do not depend on --seed. They are here rather than in
+# the README as two more psql lines because a database seeded without them is a database
+# where every step-3 tool fails on a missing relation.
+POST_LOAD_PATHS = (
+    REPO_ROOT / "db" / "seeds" / "scoring_weights.sql",
+    REPO_ROOT / "db" / "views" / "engagement_health_v1.sql",
+)
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -77,12 +93,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if not args.no_schema:
-            writer.apply_schema(SCHEMA_PATH.read_text())
+            writer.apply_sql(SCHEMA_PATH.read_text())
 
         counts = {}
         for table in TABLE_ORDER:
             rows = getattr(portfolio, table)
             counts[table] = writer.load(table, COLUMNS[table], rows)
+
+        for path in POST_LOAD_PATHS:
+            writer.apply_sql(path.read_text())
     finally:
         writer.close()
 
@@ -92,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"window {portfolio.window_start} to {portfolio.window_end}")
     for table in TABLE_ORDER:
         print(f"  {table:<16} {counts[table]:>7,}")
+    for path in POST_LOAD_PATHS:
+        print(f"  applied          {path.relative_to(REPO_ROOT)}")
     print(f"generated in {generated - started:.1f}s, loaded in {loaded - generated:.1f}s")
 
     if args.mess_report:

@@ -27,7 +27,7 @@ TABLE_ORDER = (
 
 
 class Writer(Protocol):
-    def apply_schema(self, sql: str) -> None: ...
+    def apply_sql(self, sql: str) -> None: ...
 
     def load(self, table: str, columns: Sequence[str], rows: Iterable[tuple]) -> int: ...
 
@@ -49,7 +49,7 @@ class LocalWriter:
         self.dsn = dsn or os.environ.get("BIZDATA_DSN", DEFAULT_DSN)
         self.conn = psycopg.connect(self.dsn, autocommit=False)
 
-    def apply_schema(self, sql: str) -> None:
+    def apply_sql(self, sql: str) -> None:
         with self.conn.cursor() as cur:
             cur.execute(sql)
         self.conn.commit()
@@ -76,6 +76,11 @@ class AwsWriter:
     about forty calls for the time entries. It is a stub rather than an absence so the
     backend switch is exercised from day one and step 5 is a deployment rather than a
     redesign.
+
+    One thing that will differ here rather than being a straight port: ``apply_sql``
+    takes whole files, and the Data API's ``ExecuteStatement`` accepts one statement per
+    call, so the AWS implementation has to split on statement boundaries where the local
+    one hands psycopg the file as-is.
     """
 
     def __init__(self, dsn: str | None = None) -> None:
@@ -85,7 +90,7 @@ class AwsWriter:
             "to 'local', and start the database with `docker compose up -d`."
         )
 
-    def apply_schema(self, sql: str) -> None:  # pragma: no cover - unreachable stub
+    def apply_sql(self, sql: str) -> None:  # pragma: no cover - unreachable stub
         raise NotImplementedError
 
     def load(self, table: str, columns: Sequence[str], rows: Iterable[tuple]) -> int:  # pragma: no cover
