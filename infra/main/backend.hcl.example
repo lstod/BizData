@@ -1,0 +1,7 @@
+# Copy to backend.hcl and substitute the account id, which the bootstrap
+# apply prints as the state_bucket output. backend.hcl is gitignored.
+bucket       = "bizdata-tfstate-000000000000"
+key          = "main/terraform.tfstate"
+region       = "us-west-2"
+encrypt      = true
+use_lockfile = true

@@ -218,4 +218,26 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Other
-/docs/
+# Planning docs and specs stay private. Evidence is the exception: the README
+# links to the screenshots, so they have to be in the repo.
+/docs/*
+!/docs/evidence/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+
+# Backend config carries the account id, so it stays out of a public repo.
+backend.hcl
+!backend.hcl.example
+
+# .terraform.lock.hcl is deliberately not ignored. The provider lock file
+# belongs in version control so a clone resolves the same provider builds.
+
+# macOS
+.DS_Store
