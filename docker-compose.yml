@@ -1,0 +1,32 @@
+# Local Postgres for steps 1 through 4. Aurora does not exist until step 5, and the
+# schema and every query in db/sql/ are identical against both.
+#
+# The image major version tracks the Aurora Serverless v2 floor of PostgreSQL 16.3,
+# so nothing works locally that would fail deployed.
+#
+# The credentials below are local-only and deliberately in the repo. Nothing in this
+# compose file is reachable off this machine, and the deployed database takes its
+# credentials from Secrets Manager.
+
+services:
+  postgres:
+    image: postgres:16.10
+    container_name: bizdata-postgres
+    environment:
+      POSTGRES_DB: bizdata
+      POSTGRES_USER: bizdata
+      POSTGRES_PASSWORD: bizdata
+    ports:
+      # 5432 on the host is commonly taken by another Postgres. 5433 keeps this one
+      # out of the way; BIZDATA_DSN in the README matches.
+      - "5433:5432"
+    volumes:
+      - bizdata-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bizdata -d bizdata"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  bizdata-pgdata:

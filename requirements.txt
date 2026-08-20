@@ -1,0 +1,5 @@
+# Pinned exactly. The seed generator's output has to be byte-identical between runs,
+# which means the interpreter and every library that touches the data are fixed.
+# Python 3.12 is the version the step-5 Lambda runs; see .python-version.
+
+psycopg[binary]==3.3.4
