@@ -31,3 +31,15 @@ $ diff <(check_tools --backend local) <(check_tools --backend aws)
 # Worth stating plainly: the type-coercion seam held across a full change of the
 # underlying data. The ceilings, hours, dates and margins are all different numbers and
 # the two backends still agree byte for byte.
+#
+# db/checks/checksums.sql run against both databases after the reseed. Not the same tool
+# output from two sources — the same bytes in both, which is the stronger claim:
+#
+#   clients|12|4c26bf852c7d1e09b590772a1922f7a8
+#   engagements|30|72826deaa18afba5468789021c1970ec
+#   invoices|176|5e55e9c20bf519e99467d3edfe020b56
+#   people|25|417f4d3a0f9211b466a2efe5f3b0d13a
+#   sow_line_items|122|1410746fc9d30c38a114acb3ccac7773
+#   time_entries|40000|dab2b2a3438e7d8346abf3c57eab4d25
+#
+# Identical on local Postgres and on Aurora over the Data API, all six tables.
