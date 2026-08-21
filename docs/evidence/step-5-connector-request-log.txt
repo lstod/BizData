@@ -1,0 +1,22 @@
+# What Cowork actually sent, captured 2026-08-21T04:11:02Z from /aws/lambda/bizdata-mcp-server.
+#
+# Emitted by server/reqlog.py, which exists because an HTTP API cannot log request
+# headers in its access log. This is the answer to the build-time verification
+# "which MCP protocol revision does Cowork speak", and the answer is two revisions.
+#
+# Filtered to Cowork's own user agents. Requests from curl/8.7.1 and Python-urllib/3.12
+# in the same window are this repository's own scripts/check_auth.py and curl probes.
+
+## 1. Registration and discovery -- python-httpx/0.28.1, protocol 2025-11-25
+
+2026-08-21T04:05:07 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 401, "latency_ms": 1.6, "mcp_protocol_version": "2025-11-25", "user_agent": "python-httpx/0.28.1", "authenticated": false}
+2026-08-21T04:05:07 {"event": "http_request", "method": "GET", "path": "/.well-known/oauth-protected-resource/mcp", "status": 200, "latency_ms": 0.6, "mcp_protocol_version": "2025-11-25", "user_agent": "python-httpx/0.28.1", "authenticated": false}
+
+## 2. Runtime, after the OAuth flow -- Claude-User, protocol 2026-07-28, authenticated
+
+2026-08-21T04:07:38 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 1.7, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
+2026-08-21T04:07:39 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 2.9, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
+2026-08-21T04:07:41 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 1.9, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
+2026-08-21T04:07:41 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 3.2, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
+2026-08-21T04:07:41 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 1.7, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
+2026-08-21T04:07:41 {"event": "http_request", "method": "POST", "path": "/mcp", "status": 200, "latency_ms": 1.6, "mcp_protocol_version": "2026-07-28", "user_agent": "Claude-User", "authenticated": true}
