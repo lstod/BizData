@@ -62,6 +62,32 @@ MAX_DAY_UNITS = 105  # nobody gets a longer day than this, including the case 8 
 PTO_RATE = 0.07
 NON_BILLABLE_RATE = 0.12
 
+# Teams stay small because people are on two or three things at a time. Drawn directly
+# rather than derived from the ceiling: the ceiling is a consequence of the planned team
+# and duration, not the other way round, and inverting that was what produced a portfolio
+# where 39% of engagements had blown their budget.
+TEAM_SIZES = (2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 6)
+
+# Hours per person per live week. Only sizes the provisional ceiling that mess-anchor
+# selection sorts on — the ceiling that reaches the database is derived from hours
+# actually delivered, in _scale_ceilings.
+PLANNING_DENSITY = Decimal("10.7")
+
+# How much of the active portfolio is deliberately mis-scoped, and how hard. A real book
+# of work has a few engagements over budget and a few barely started; the rest track
+# their plan. These counts are what keep burn a signal instead of noise.
+N_OVERRUN = 3
+N_UNDERRUN = 3
+OVERRUN_BURN = (105, 145)  # percent of ceiling already consumed
+UNDERRUN_BURN = (25, 50)
+ON_PLAN_PERFORMANCE = (85, 105)  # percent of planned pace; >100 is running hot
+BURN_BOUNDS = (Decimal("0.20"), Decimal("0.97"))  # on-plan engagements stay inside these
+
+# Mess case 4 shows a bad margin next to a burn that looks fine. db/checks/health_v1.sql
+# reads "looks fine" as burn to date between 50% and 80%, and the health model turns amber
+# on a projection over 85%, so both have to hold at once.
+CASE_4_BURN = Decimal("0.65")
+
 CENTS = Decimal("0.01")
 
 # --------------------------------------------------------------------------------------
@@ -235,6 +261,11 @@ class Engagement:
     start_date: dt.date
     end_date: dt.date
     status: str
+    # Generator-side only, not columns. team_size drives staffing and the provisional
+    # ceiling; blended_rate converts the final ceiling_hours into a fee.
+    team_size: int = 0
+    blended_rate: Decimal = Decimal(0)
+    fee_factor: Decimal = Decimal(1)
 
 
 @dataclass
@@ -430,17 +461,17 @@ class _Builder:
                     used_names.add(name)
                     break
 
-            ceiling_hours = Decimal(self.rng.randrange(200, 3201, 20))
+            team_size = self.rng.choice(TEAM_SIZES)
             blended = Decimal(self.rng.randint(240, 330))
-            if fee_type == "fixed":
+            fee_factor = (
                 # A negotiated fee, not hours times a rate card.
-                factor = Decimal(self.rng.randint(85, 105)) / Decimal(100)
-                ceiling_amount = (ceiling_hours * blended * factor).quantize(CENTS)
-            else:
-                ceiling_amount = (ceiling_hours * blended).quantize(CENTS)
+                Decimal(self.rng.randint(85, 105)) / Decimal(100)
+                if fee_type == "fixed"
+                else Decimal(1)
+            )
 
             if status == "active":
-                start = self.window_start + dt.timedelta(days=self.rng.randrange(-210, 200))
+                start = self.window_start + dt.timedelta(days=self.rng.randrange(0, 200))
                 end = self.window_end + dt.timedelta(days=self.rng.randrange(20, 300))
                 if end < start + dt.timedelta(days=120):
                     end = start + dt.timedelta(days=120)
@@ -448,8 +479,21 @@ class _Builder:
                 end = self.window_end - dt.timedelta(days=self.rng.randrange(20, 210))
                 start = end - dt.timedelta(days=self.rng.randrange(90, 400))
             else:  # on_hold
-                start = self.window_start - dt.timedelta(days=self.rng.randrange(30, 200))
+                start = self.window_start + dt.timedelta(days=self.rng.randrange(0, 60))
                 end = self.window_end + dt.timedelta(days=self.rng.randrange(30, 200))
+
+            # No engagement starts before the data window. Burn is hours logged against
+            # the ceiling, and an engagement that ran for months before the earliest time
+            # entry has a numerator missing that history — it reads as under-burnt when it
+            # is only under-recorded. Clamping keeps every burn figure defensible against
+            # the rows actually in the database.
+            start = max(start, self.window_start)
+
+            # Provisional only. Mess-anchor selection sorts on fee to find an engagement
+            # worth worrying about, and that has to happen before any hours exist.
+            weeks = Decimal(max((end - start).days, 30)) / Decimal(7)
+            ceiling_hours = (Decimal(team_size) * weeks * PLANNING_DENSITY).quantize(CENTS)
+            ceiling_amount = (ceiling_hours * blended * fee_factor).quantize(CENTS)
 
             self.engagements.append(
                 Engagement(
@@ -463,6 +507,9 @@ class _Builder:
                     start_date=start,
                     end_date=end,
                     status=status,
+                    team_size=team_size,
+                    blended_rate=blended,
+                    fee_factor=fee_factor,
                 )
             )
         self.by_id = {e.id: e for e in self.engagements}
@@ -481,7 +528,21 @@ class _Builder:
             raise RuntimeError("ran out of active engagements while placing mess cases")
 
         # Case 4 first: it is the only one with a hard requirement on fee type.
-        case4 = take(lambda e: e.fee_type == "fixed")
+        #
+        # Burn to date and projected burn divide the same ceiling, so the ratio between
+        # them belongs to the engagement and nothing downstream can set it. An engagement
+        # with most of its contract still ahead cannot show a healthy 65% today and a
+        # healthy projection at once — pin one and the other runs away, which is how this
+        # case ended up scored red on burn_trajectory, the exact opposite of the healthy
+        # burn it exists to show. Taking the fixed-fee engagement with the least runway
+        # left relative to the work already behind it keeps both inside the band.
+        def runway(e) -> float:
+            remaining = (e.end_date - self.period_end).days
+            elapsed = max((self.period_end - e.start_date).days, 1)
+            return remaining / elapsed
+
+        case4_pick = min((e for e in active if e.fee_type == "fixed"), key=runway)
+        case4 = take(lambda e: e.id == case4_pick.id)
 
         # Case 6: an engagement that stops mid-period. Shortening the end date here,
         # before staffing, is what makes its time entries actually stop.
@@ -560,11 +621,18 @@ class _Builder:
             # 260 hours in a month against a single person.
             is_case8 = e.id == self.mess["case_8_concentration_engagement"]
 
-            # Teams are small because people are on two or three things at a time, not
-            # eight. Oversized teams here put every consultant on most of the portfolio
-            # at once, which reads as nonsense to anyone who has worked in services and
-            # dilutes any concentration the data is supposed to show.
-            team_size = max(2, min(6, int(e.ceiling_hours / Decimal(600)) + 1))
+            # Case 6 stops mid-period, and it has to keep filing right up to the day it
+            # stops. Roll-off jitter takes the supporting team off up to a fortnight
+            # early, and because the lead carries the lowest weight on the engagement,
+            # what is left logs almost nothing — so the engagement reads as silent for
+            # its last two weeks, which is mess case 3. Two cases detecting as one is how
+            # a fixture starts lying about what it contains.
+            ends_mid_period = e.id == self.mess["case_6_mid_period_end_engagement"]
+
+            # Drawn with the engagement rather than read back off the ceiling. The team
+            # and the duration are what a SOW is estimated from, so they have to exist
+            # before the ceiling does.
+            team_size = e.team_size
             n_senior = 1 if team_size <= 4 else 2
             n_junior = max(0, team_size - 1 - n_senior)
             if is_case8:
@@ -605,7 +673,9 @@ class _Builder:
                 # and make it indistinguishable from mess case 7, which is the one dip
                 # that is supposed to be there.
                 rolls_on = index > 0 and e.start_date >= self.window_start
-                rolls_off = index > 0 and e.end_date <= self.window_end
+                rolls_off = (
+                    index > 0 and e.end_date <= self.window_end and not ends_mid_period
+                )
 
                 start = (
                     live_start + dt.timedelta(days=self.rng.randrange(0, 21))
@@ -952,6 +1022,88 @@ class _Builder:
         self.mess["case_2_person_id"] = source.person_id
         self.mess["case_2_entry_date"] = source.entry_date
 
+    def _scale_ceilings(self) -> None:
+        """Set every ceiling from the hours actually delivered against it.
+
+        The ceiling used to be ``randrange(200, 3201, 20)`` — a number with no
+        relationship to the team, the duration or the work. Hours accumulated from the
+        staffing model regardless, so on seed 42 seven of eighteen active engagements had
+        already blown their budget and one was at 219%. Burn stopped sorting the
+        portfolio: fourteen of eighteen scored amber with ``burn_trajectory`` as the top
+        risk factor, and mess case 4 — a healthy burn hiding a bad margin — lost its
+        contrast against a portfolio where half the book looked unhealthy.
+
+        Deriving the ceiling from delivered hours is the same trick ``_apply_case_4``
+        already used to pin one engagement at 65% burn, applied to the whole portfolio:
+        pick the burn each engagement should show, then solve for the ceiling that
+        produces it. The story holds up because that is genuinely what a SOW is — an
+        estimate of the effort the team went on to spend, right more often than not.
+
+        Most engagements track their contract: burn follows elapsed time, adjusted by how
+        well the work is being run. A deliberate few over-run and a deliberate few have
+        barely started, so burn stays a signal rather than a background hum.
+        """
+        logged: dict[int, int] = {}
+        for entry in self.entries:
+            logged[entry.engagement_id] = logged.get(entry.engagement_id, 0) + entry.units
+
+        # Case 4 sets its own ceiling immediately after this runs, so it is held out of
+        # the mis-scoping draw rather than assigned a burn it will not keep.
+        case4 = self.mess["case_4_fixed_fee_engagement"]
+        pool = [
+            e.id for e in self.engagements if e.status == "active" and e.id != case4
+        ]
+        self.rng.shuffle(pool)
+        overrun = set(pool[:N_OVERRUN])
+        underrun = set(pool[N_OVERRUN : N_OVERRUN + N_UNDERRUN])
+
+        for e in self.engagements:
+            hours = units_to_hours(logged.get(e.id, 0))
+            if hours <= 0:
+                continue
+
+            if e.id in overrun:
+                burn = Decimal(self.rng.randint(*OVERRUN_BURN)) / Decimal(100)
+            elif e.id in underrun:
+                burn = Decimal(self.rng.randint(*UNDERRUN_BURN)) / Decimal(100)
+            else:
+                contract = Decimal(max((e.end_date - e.start_date).days, 1))
+                elapsed = Decimal(
+                    max((min(e.end_date, self.window_end) - e.start_date).days, 1)
+                )
+                performance = Decimal(self.rng.randint(*ON_PLAN_PERFORMANCE)) / Decimal(100)
+                burn = (elapsed / contract) * performance
+                low, high = BURN_BOUNDS
+                burn = max(low, min(high, burn))
+
+            # Ceilings are negotiated in round numbers, not to the tenth of an hour.
+            ceiling = (hours / burn / Decimal(20)).quantize(Decimal("1")) * Decimal(20)
+            ceiling = max(ceiling, Decimal(20))
+            e.ceiling_hours = ceiling.quantize(CENTS)
+            e.ceiling_amount = (ceiling * e.blended_rate * e.fee_factor).quantize(CENTS)
+
+        # Case 8 was picked for a fee above the median back when the fees were
+        # provisional. scope-escalation only flags key-person concentration above the
+        # median, so if rescaling dropped it below, the mess case would stop firing
+        # silently — the worst way for a fixture to break.
+        active_fees = sorted(
+            e.ceiling_amount for e in self.engagements if e.status == "active"
+        )
+        median_fee = active_fees[len(active_fees) // 2]
+        case8 = self.by_id[self.mess["case_8_concentration_engagement"]]
+        if case8.ceiling_amount < median_fee:
+            scale = (median_fee / case8.ceiling_amount) * Decimal("1.05")
+            ceiling = (case8.ceiling_hours * scale / Decimal(20)).quantize(
+                Decimal("1")
+            ) * Decimal(20)
+            case8.ceiling_hours = ceiling.quantize(CENTS)
+            case8.ceiling_amount = (
+                ceiling * case8.blended_rate * case8.fee_factor
+            ).quantize(CENTS)
+
+        self.mess["ceiling_overrun_engagements"] = sorted(overrun)
+        self.mess["ceiling_underrun_engagements"] = sorted(underrun)
+
     def _apply_case_4(self) -> None:
         """A fixed-fee engagement losing money while its burn looks fine.
 
@@ -977,12 +1129,58 @@ class _Builder:
         if hours <= 0:
             return
 
-        ceiling_hours = (hours / Decimal("0.65")).quantize(Decimal("1"))
-        ceiling_hours = (ceiling_hours / Decimal(10)).quantize(Decimal("1")) * Decimal(10)
+        # The score reads projected burn, not burn to date, and sizing the ceiling off
+        # hours already logged leaves the projection free to run away. On an engagement
+        # with most of its contract still to run, the trailing run rate carried a ceiling
+        # chosen to read as 65% to a 168% projection: the case scored red with
+        # burn_trajectory as its top risk, which is the precise opposite of the healthy
+        # burn it exists to show. Size the ceiling so the projection lands healthy and
+        # burn to date follows it down.
+        as_of = min(engagement.end_date, self.period_end)
+        weekly: dict[dt.date, int] = {}
+        for entry in self.entries:
+            if entry.engagement_id != eid or entry.entry_date > as_of:
+                continue
+            week = entry.entry_date - dt.timedelta(days=entry.entry_date.weekday())
+            weekly[week] = weekly.get(week, 0) + entry.units
+
+        # Mirror the view's run-rate window rather than approximate it: the last four
+        # readable weeks fully behind as_of, no further back than seventy days, with a
+        # week the engagement sat out counted as zero. Averaging only the weeks that have
+        # entries reads a quiet fortnight as full pace and pushes the projection high.
+        week_end = as_of - dt.timedelta(days=as_of.weekday() + 1)
+        candidates: list[dt.date] = []
+        while len(candidates) < 4:
+            week_start = week_end - dt.timedelta(days=6)
+            if week_start < engagement.start_date or week_start <= as_of - dt.timedelta(days=70):
+                break
+            # Firm-wide silence is not this engagement's run rate, and the view drops
+            # unreadable weeks from the average for the same reason.
+            if week_start != self.coverage_week_start:
+                candidates.append(week_start)
+            week_end -= dt.timedelta(days=7)
+
+        weekly_rate = (
+            units_to_hours(sum(weekly.get(w, 0) for w in candidates)) / Decimal(len(candidates))
+            if candidates
+            else Decimal(0)
+        )
+        remaining_weeks = Decimal(max(0, (engagement.end_date - as_of).days)) / Decimal(7)
+        projected = hours + weekly_rate * remaining_weeks
+
+        # Pinned on burn to date, which is what "healthy burn" means to the check and to
+        # anyone reading the row. The projection is recorded rather than targeted: the
+        # anchor is chosen so it follows burn to date into the healthy band instead of
+        # having to be forced there.
+        ceiling_hours = (
+            hours / CASE_4_BURN / Decimal(10)
+        ).quantize(Decimal("1")) * Decimal(10)
         engagement.ceiling_hours = ceiling_hours.quantize(CENTS)
         engagement.ceiling_amount = (cost * Decimal("0.85")).quantize(CENTS)
 
         self.mess["case_4_hours_to_date"] = hours
+        self.mess["case_4_projected_hours"] = projected.quantize(CENTS)
+        self.mess["case_4_projected_burn_pct"] = round(float(projected / ceiling_hours), 4)
         self.mess["case_4_burn_pct"] = round(float(hours / ceiling_hours), 4)
         self.mess["case_4_cost_to_date"] = cost.quantize(CENTS)
         self.mess["case_4_margin_pct"] = round(
@@ -1115,6 +1313,7 @@ class _Builder:
         self._apply_case_1()
         self._apply_case_5()
         self._apply_case_2()
+        self._scale_ceilings()
         self._apply_case_4()
         self._assign_entry_ids()
 

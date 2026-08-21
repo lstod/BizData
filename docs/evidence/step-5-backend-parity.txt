@@ -17,3 +17,17 @@ $ diff <(check_tools --backend local) <(check_tools --backend aws)
 
 # The only difference across 178 lines is a run_id, which the server mints randomly when
 # the caller omits one. Assertion 175 exists to prove exactly that it is random.
+
+# --------------------------------------------------------------------------------------
+# Re-run 2026-08-21 after the ceiling_hours fix, which reseeded both databases from a
+# changed generator. 183 lines now — the fixture moved, the assertion count did not
+# (177 of 177 on each backend). Same single difference:
+#
+# 178c178
+# < 175  t   run_id: the server mints one when the caller omits it   req-004b80d7e3c6, echoed in the response
+# ---
+# > 175  t   run_id: the server mints one when the caller omits it   req-c065f419a93f, echoed in the response
+#
+# Worth stating plainly: the type-coercion seam held across a full change of the
+# underlying data. The ceilings, hours, dates and margins are all different numbers and
+# the two backends still agree byte for byte.
