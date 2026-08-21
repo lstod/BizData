@@ -37,7 +37,7 @@ import sys
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from server import toollog
+from server import reqlog, toollog
 from server.tools import TOOLS
 
 INSTRUCTIONS = """
@@ -74,13 +74,16 @@ for tool in TOOLS:
 # stdout locally; at step 5 the Lambda's stdout is CloudWatch Logs and this line is what
 # lands there, unchanged and still one JSON object per line.
 toollog.configure(sys.stdout)
+reqlog.configure(sys.stdout)
 
 
-app = mcp.streamable_http_app(
-    streamable_http_path="/mcp",
-    stateless_http=True,
-    json_response=True,
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+app = reqlog.RequestLogMiddleware(
+    mcp.streamable_http_app(
+        streamable_http_path="/mcp",
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 )
 
 

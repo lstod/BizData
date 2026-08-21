@@ -1,0 +1,16 @@
+{
+    "Function": "bizdata-mcp-server",
+    "Runtime": "python3.12",
+    "Architectures": [
+        "arm64"
+    ],
+    "Handler": "run.sh",
+    "MemorySize": 1024,
+    "Timeout": 30,
+    "Layers": [
+        "arn:aws:lambda:us-west-2:753240598075:layer:LambdaAdapterLayerArm64:28"
+    ],
+    "VpcConfig": null,
+    "ExecWrapper": "/opt/bootstrap",
+    "Backend": "aws"
+}

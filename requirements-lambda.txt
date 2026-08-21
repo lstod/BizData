@@ -1,0 +1,14 @@
+# What goes in the Lambda zip, which is not the same list as requirements.txt.
+#
+# Two deliberate absences. psycopg is missing because the deployed server never speaks to
+# Postgres directly — server/db.py imports it inside LocalBackend precisely so the aws
+# path never needs it, and it is the one dependency here with a compiled extension that
+# would have to be built for the target platform. boto3 is missing because the Lambda
+# runtime already provides it; shipping a second copy costs package size and pins the
+# deployed version to whatever this file says rather than what AWS maintains.
+#
+# Versions are the same pins as requirements.txt and have to stay that way: the whole
+# point of the two-backend seam is that the deployed server is the same server.
+
+mcp==2.0.0
+uvicorn==0.52.4

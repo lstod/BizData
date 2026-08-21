@@ -533,13 +533,33 @@ async def main() -> int:
     ap.add_argument("--dsn", default=db.DEFAULT_DSN)
     ap.add_argument("--no-reseed", action="store_true", help="Use the database as it stands.")
     ap.add_argument("--verbose", "-v", action="store_true", help="Print passing assertions too.")
+    ap.add_argument(
+        "--backend",
+        choices=("local", "aws"),
+        default="local",
+        help=(
+            "Which database to drive the tools against. 'aws' is the RDS Data API and is "
+            "how step 5 proves the two backends agree: the same assertions, the same seed, "
+            "one swapped adapter. It implies --no-reseed unless you really do mean to "
+            "reload Aurora."
+        ),
+    )
     args = ap.parse_args()
 
     seeds = args.seed or list(FIXTURE_SEEDS)
     if args.no_reseed and len(seeds) > 1:
         ap.error("--no-reseed needs a single --seed, since it cannot change the loaded data")
+    if args.backend == "aws" and not args.no_reseed:
+        ap.error(
+            "--backend aws expects --no-reseed. Reseeding Aurora takes half a minute per "
+            "seed over the Data API and is a separate deliberate act: "
+            "`python scripts/seed.py --seed N --period 2026-08`."
+        )
 
-    db._backend = db.LocalBackend(args.dsn)
+    # Anchors come from the generator rather than the database, so the harness does not
+    # care which backend is underneath. That is exactly what makes this a parity check:
+    # every assertion below was written for local Postgres and none of them was touched.
+    db._backend = db.get_backend(args.backend, args.dsn)
 
     ok = True
     for seed in seeds:

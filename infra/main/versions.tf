@@ -6,6 +6,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.61"
     }
+
+    # Generates the mcp_readonly password and the demo user's, so neither is
+    # ever written down in this repository. Both land in state, which is why
+    # the state bucket from step 0 is encrypted and versioned.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.7"
+    }
   }
 
   # Partial backend configuration. The concrete values live in backend.hcl,

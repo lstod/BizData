@@ -1,0 +1,13 @@
+{
+    "Cluster": "bizdata",
+    "Engine": "aurora-postgresql",
+    "EngineVersion": "16.10",
+    "EngineMode": "provisioned",
+    "HttpEndpointEnabled": true,
+    "ServerlessV2ScalingConfiguration": {
+        "MinCapacity": 0.0,
+        "MaxCapacity": 1.0,
+        "SecondsUntilAutoPause": 86400
+    },
+    "Encrypted": true
+}

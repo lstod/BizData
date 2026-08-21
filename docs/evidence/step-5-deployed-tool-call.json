@@ -1,0 +1,105 @@
+# A real tools/call against the deployed MCP server, captured 2026-08-21T03:46:54Z.
+#
+# Endpoint: https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp
+# Path:     Cowork -> HTTP API ($default stage) -> Lambda (arm64, no VPC, Web Adapter)
+#           -> RDS Data API -> Aurora Serverless v2 PostgreSQL 16.10 at min 0 ACU.
+#
+# The role executing the SQL is mcp_readonly, which holds SELECT and nothing else.
+
+$ curl -s -X POST "$BIZDATA_MCP_ENDPOINT" \
+    -H "content-type: application/json" \
+    -H "accept: application/json, text/event-stream" \
+    -H "mcp-protocol-version: 2026-07-28" \
+    -H "mcp-method: tools/call" \
+    -H "mcp-name: list_engagements" \
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_engagements","arguments":{"as_of_date":"2026-08-31","status":"active","limit":3,"run_id":"step5-gate"},"_meta":{...}}}'
+
+{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+        "content": [
+            {
+                "text": "{\n  \"run_id\": \"step5-gate\",\n  \"total_count\": 18,\n  \"returned_count\": 3,\n  \"scoring_model_version\": \"v1.0\",\n  \"engagements\": [\n    {\n      \"engagement_id\": 2,\n      \"client_name\": \"Oakhaven Logistics Collective\",\n      \"name\": \"Credit Risk Migration\",\n      \"sow_ref\": \"SOW-2025-002\",\n      \"fee_type\": \"fixed\",\n      \"status\": \"active\",\n      \"ceiling_hours\": 1800.0,\n      \"ceiling_amount\": 382356.0,\n      \"start_date\": \"2025-11-29\",\n      \"end_date\": \"2027-05-22\",\n      \"days_remaining\": 264,\n      \"hours_to_date\": 1270.0,\n      \"burn_pct\": 70.6,\n      \"health_score\": 65.5,\n      \"health_band\": \"amber\",\n      \"score_delta_vs_prior_period\": 0.5,\n      \"top_risk_factor\": \"reporting_gap\"\n    },\n    {\n      \"engagement_id\": 3,\n      \"client_name\": \"Ashcombe Health Partners\",\n      \"name\": \"Revenue Assurance Optimisation\",\n      \"sow_ref\": \"SOW-2025-003\",\n      \"fee_type\": \"time_and_materials\",\n      \"status\": \"active\",\n      \"ceiling_hours\": 1000.0,\n      \"ceiling_amount\": 247000.0,\n      \"start_date\": \"2025-10-21\",\n      \"end_date\": \"2026-10-31\",\n      \"days_remaining\": 61,\n      \"hours_to_date\": 566.2,\n      \"burn_pct\": 56.6,\n      \"health_score\": 98.5,\n      \"health_band\": \"green\",\n      \"score_delta_vs_prior_period\": -0.3,\n      \"top_risk_factor\": \"payment_behaviour\"\n    },\n    {\n      \"engagement_id\": 5,\n      \"client_name\": \"Pentland Media Group\",\n      \"name\": \"Payments Integration\",\n      \"sow_ref\": \"SOW-2025-005\",\n      \"fee_type\": \"fixed\",\n      \"status\": \"active\",\n      \"ceiling_hours\": 1460.0,\n      \"ceiling_amount\": 476777.6,\n      \"start_date\": \"2025-02-23\",\n      \"end_date\": \"2026-10-31\",\n      \"days_remaining\": 61,\n      \"hours_to_date\": 1187.2,\n      \"burn_pct\": 81.3,\n      \"health_score\": 87.0,\n      \"health_band\": \"green\",\n      \"score_delta_vs_prior_period\": -3.9,\n      \"top_risk_factor\": \"burn_trajectory\"\n    }\n  ],\n  \"next_cursor\": \"5\",\n  \"as_of_date\": \"2026-08-31\",\n  \"period_start\": \"2026-08-01\"\n}",
+                "type": "text"
+            }
+        ],
+        "isError": false,
+        "resultType": "complete",
+        "structuredContent": {
+            "run_id": "step5-gate",
+            "total_count": 18,
+            "returned_count": 3,
+            "scoring_model_version": "v1.0",
+            "engagements": [
+                {
+                    "engagement_id": 2,
+                    "client_name": "Oakhaven Logistics Collective",
+                    "name": "Credit Risk Migration",
+                    "sow_ref": "SOW-2025-002",
+                    "fee_type": "fixed",
+                    "status": "active",
+                    "ceiling_hours": 1800.0,
+                    "ceiling_amount": 382356.0,
+                    "start_date": "2025-11-29",
+                    "end_date": "2027-05-22",
+                    "days_remaining": 264,
+                    "hours_to_date": 1270.0,
+                    "burn_pct": 70.6,
+                    "health_score": 65.5,
+                    "health_band": "amber",
+                    "score_delta_vs_prior_period": 0.5,
+                    "top_risk_factor": "reporting_gap"
+                },
+                {
+                    "engagement_id": 3,
+                    "client_name": "Ashcombe Health Partners",
+                    "name": "Revenue Assurance Optimisation",
+                    "sow_ref": "SOW-2025-003",
+                    "fee_type": "time_and_materials",
+                    "status": "active",
+                    "ceiling_hours": 1000.0,
+                    "ceiling_amount": 247000.0,
+                    "start_date": "2025-10-21",
+                    "end_date": "2026-10-31",
+                    "days_remaining": 61,
+                    "hours_to_date": 566.2,
+                    "burn_pct": 56.6,
+                    "health_score": 98.5,
+                    "health_band": "green",
+                    "score_delta_vs_prior_period": -0.3,
+                    "top_risk_factor": "payment_behaviour"
+                },
+                {
+                    "engagement_id": 5,
+                    "client_name": "Pentland Media Group",
+                    "name": "Payments Integration",
+                    "sow_ref": "SOW-2025-005",
+                    "fee_type": "fixed",
+                    "status": "active",
+                    "ceiling_hours": 1460.0,
+                    "ceiling_amount": 476777.6,
+                    "start_date": "2025-02-23",
+                    "end_date": "2026-10-31",
+                    "days_remaining": 61,
+                    "hours_to_date": 1187.2,
+                    "burn_pct": 81.3,
+                    "health_score": 87.0,
+                    "health_band": "green",
+                    "score_delta_vs_prior_period": -3.9,
+                    "top_risk_factor": "burn_trajectory"
+                }
+            ],
+            "next_cursor": "5",
+            "as_of_date": "2026-08-31",
+            "period_start": "2026-08-01"
+        },
+        "_meta": {
+            "io.modelcontextprotocol/serverInfo": {
+                "name": "bizdata",
+                "title": "BizData delivery and margin review",
+                "version": "0.3.0"
+            }
+        }
+    }
+}

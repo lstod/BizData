@@ -13,3 +13,8 @@ mcp==2.0.0
 # mcp already depends on uvicorn, but the ASGI server is how this repo runs the server
 # locally, so it is a direct dependency here and pinned like one.
 uvicorn==0.52.4
+
+# The RDS Data API client, for the aws backend at step 5. The Lambda runtime ships its
+# own boto3, so this pin is for the seed script and the bootstrap script running here;
+# requirements-lambda.txt deliberately leaves it out of the deployment package.
+boto3==1.42.51

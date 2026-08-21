@@ -117,6 +117,36 @@ def to_pyformat(sql: str) -> str:
     return "".join(parts)
 
 
+def split_statements(sql: str) -> list[str]:
+    """Split a file into statements on semicolons the scanner agrees are separators.
+
+    The Data API takes one statement per call where psycopg takes a whole file, so
+    ``db/schema.sql`` and the view files have to be broken up on the way to Aurora. The
+    same scanner that protects ``::`` casts from the rewriter protects semicolons inside
+    comments and string literals from this, which is the entire reason it was written as a
+    scanner at step 3 rather than a regular expression.
+
+    Nothing in db/ uses a dollar-quoted body, so there is no function-boundary case to
+    handle. If one ever appears this will split it in half, loudly, on the first run.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    for kind, text in _scan(sql):
+        if kind != "sql":
+            current.append(f":{text}" if kind == "param" else text)
+            continue
+        while ";" in text:
+            head, _, text = text.partition(";")
+            current.append(head)
+            if statement := "".join(current).strip():
+                statements.append(statement)
+            current = []
+        current.append(text)
+    if statement := "".join(current).strip():
+        statements.append(statement)
+    return statements
+
+
 @lru_cache(maxsize=None)
 def load_sql(name: str) -> str:
     """Read ``db/sql/<name>.sql``. Cached: these are read-only files read on every call."""
@@ -205,30 +235,34 @@ class LocalBackend:
 
 
 class AwsBackend:
-    """RDS Data API, filled in at step 5.
+    """RDS Data API against Aurora Serverless v2, over HTTPS with no connection at all.
 
-    The shape is already decided and the SQL needs no translation to reach it: the files
-    in db/sql/ are already in the Data API's ``:name`` form, so this backend passes the
-    text through unchanged and builds the typed ``parameters`` list that
-    ``ExecuteStatement`` takes — each value tagged ``stringValue``, ``longValue``,
-    ``doubleValue`` or ``isNull``, which is the one real piece of work here.
+    The port turned out to be nearly nothing, which is the whole return on the seam: the
+    files in db/sql/ are already in the Data API's ``:name`` form and already carry their
+    own casts, so the text goes down unchanged and the binding is one branch on ``None``.
+    What real work there is happens on the way back, in ``server/dataapi.py``, turning
+    positional typed fields into the dict rows psycopg would have produced.
 
-    Two things that will differ rather than being a straight port: the Data API returns
-    ``records`` as positional typed values rather than named columns, so column names come
-    from ``columnMetadata`` and the dict rows are assembled here; and responses are capped
-    at 1 MiB, which every tool already satisfies by aggregating, but which becomes an error
-    rather than a slow response if one ever stops.
+    No pooling and no connection lifetime, matching ``LocalBackend``'s deliberate
+    one-connection-per-query shape. Read-only here is a Postgres grant rather than a
+    transaction flag: the Lambda holds the ``mcp_readonly`` secret and nothing else.
+
+    Two settings this backend does not send and cannot. ``set jit = off`` and ``set time
+    zone 'UTC'`` are per-session and the Data API gives every call its own session, so
+    they are attached to the ``mcp_readonly`` role instead — see db/seeds/mcp_readonly.sql
+    for why that is the role rather than a cluster parameter, and for the finding that
+    Aurora ships JIT off already where community Postgres 16 ships it on.
     """
 
     def __init__(self, dsn: str | None = None) -> None:
-        raise NotImplementedError(
-            "The aws backend lands at step 5, with the Aurora cluster and its Data API. "
-            "Until then run against local Postgres: unset BIZDATA_DB_BACKEND or set it "
-            "to 'local', and start the database with `docker compose up -d`."
-        )
+        from server.dataapi import DataApi
 
-    def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:  # pragma: no cover
-        raise NotImplementedError
+        self.api = DataApi.from_env()
+
+    def query(self, sql: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        params = params or {}
+        check_params(sql, params, "query")
+        return self.api.query(sql, params)
 
 
 BACKENDS = {"local": LocalBackend, "aws": AwsBackend}

@@ -232,6 +232,9 @@ crash.*.log
 *.tfvars
 !*.tfvars.example
 
+# Saved plans. Binary, short-lived, and they embed resolved values from state.
+*.tfplan
+
 # Backend config carries the account id, so it stays out of a public repo.
 backend.hcl
 !backend.hcl.example
