@@ -1,0 +1,60 @@
+Cowork delivery review, re-run after the ceiling_hours fix
+Captured 2026-08-21 from /aws/lambda/bizdata-mcp-server, run_id delivery-margin-review-20260831
+Same prompt as the pre-fix run in step-5-connector-tool-chain.txt.
+
+TOOL CHAIN — 17 calls (was 30)
+
+  1x  list_engagements  status=active, limit=25   -> 18 of 18
+  8x  get_engagement_burn + get_financials        -> ids 5, 8, 9, 15, 19, 20, 22, 25
+
+The fan-out narrowed from 14 engagements to 8 because the portfolio got healthier,
+not because the client changed behaviour: the >70% burn or non-green filter is the
+same one, applied to a book of work that no longer has half its engagements over
+budget. No get_time_summary call in this run.
+
+ACCURACY — every figure re-queried against Aurora, all exact
+
+  id  engagement                          burn     projected      margin   concentration
+   5  Pentland — Procurement Modern.      65.1%    2145.1         -17.6%   24.8% (5p)
+   8  Braemar — Regulatory Reporting     131.0%    2503.0 (+145%)  24.7%   48.9% (4p)
+   9  Northfield — Pricing Modern.       124.5%    1394.4 (+79%)   33.5%   54.1% (2p)
+  15  Ashcombe — Workforce Planning       76.1%    3162.2 (+0%)    50.7%   50.2% (4p)
+  19  Thornbury — Grid Analytics          86.9%     987.5 (+5.1%)  51.6%   59.5% (2p)
+  20  Quarrymoor — Inventory Impl.        56.2%    6328.8 (+30.8%) 75.0%   33.0% (6p)
+  22  Fernhollow — Billing Platform       58.9%    1688.5 (+11.1%) 49.8%   33.1% (4p)
+  25  Stonebridge — Billing Platform      80.6%    2144.8 (+0%)    50.2%   53.7% (3p)
+
+Pentland detail also exact: cost to date $156,516 against a $133,038.43 ceiling,
+realisation 87.0%. All 18 burn percentages in the summary table match to one decimal.
+Nothing was fabricated.
+
+WHAT THE FIX BOUGHT
+
+Mess case 4 is now the headline finding. Pentland Media is the only negative margin in
+the portfolio, at 65.1% burn with a high-confidence projection showing no hours overrun —
+which is precisely the contrast the case exists to create. Before the fix it was one
+amber row among twelve, and on 10 of the 17 seeds its top risk factor was burn_trajectory
+rather than margin, meaning the case was not findable by its own description.
+
+Case 3 was caught and correctly attributed. The client reported Stonebridge as an
+engagement-specific filing gap rather than a firm-wide data issue, and that claim is
+supported by the payload rather than inferred: confidence_reason reads "2 of the trailing
+4 readable weeks have no time logged against this engagement", and readable is defined in
+engagement_burn_v1 as a week the firm was filing. The step-3 wording did its job.
+
+WHAT THE FIX COST — three cases present in the data went unsurfaced
+
+  case 7  the firm-wide gap week is still there and still flagged: week of 2026-08-10 at
+          16.7% coverage, firm_wide_gap = true. The pre-fix review led with it. This one
+          never saw it, because it never called get_time_summary across the portfolio.
+  case 8  engagement 12 sits at 85.4% person concentration across 2 people, but at 67.5%
+          burn in the green band it never cleared the fan-out filter.
+  case 6  engagement 2 ends 2026-08-21, ten days before the as-of date, at 29.1% burn.
+          Also healthy-looking, also never examined.
+
+None of these are gone — the 17-seed sweep detects all eight cases on every seed. They
+went unsurfaced because a credible portfolio gives the client less reason to dig, and all
+three sit on engagements that look fine on burn and band. That is the trade the fix makes,
+and it is the right trade, but it means the step 6 pack cannot rely on a burn-threshold
+fan-out to find them. Coverage and concentration have to be pulled for the whole portfolio
+regardless of how healthy the engagements look.
