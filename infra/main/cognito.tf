@@ -120,6 +120,45 @@ resource "aws_cognito_user_pool_client" "cowork" {
   prevent_user_existence_errors = "ENABLED"
 }
 
+# A second client, for proving the server rather than for using it.
+#
+# The connector's flow is authorization_code with PKCE, which requires a human
+# at a browser and therefore cannot be asserted in a script. That leaves the
+# server's own half of the contract — signature, issuer, token_use, client_id,
+# expiry, scope — untested by anything repeatable, which for the one security
+# boundary in the build is the wrong place to have no test.
+#
+# client_credentials closes that. It is the one Cognito grant that mints a real
+# access token, signed by the real pool, carrying the real bizdata/read scope,
+# with no browser anywhere. scripts/check_auth.py uses it to prove the chain end
+# to end and to prove the negatives that matter more: no token is refused, a
+# tampered token is refused, and an ID token is refused.
+#
+# It is deliberately not the connector's client. Cowork gets a client that can
+# only do authorization_code, so the demo path and the test path cannot be
+# confused for one another.
+resource "aws_cognito_user_pool_client" "machine" {
+  count = var.enable_auth ? 1 : 0
+
+  name         = "bizdata-test-machine"
+  user_pool_id = aws_cognito_user_pool.main[0].id
+
+  generate_secret = true
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["client_credentials"]
+
+  # No openid here, and not by preference: client_credentials has no user, so
+  # there is no identity to describe and Cognito rejects the combination.
+  allowed_oauth_scopes = aws_cognito_resource_server.bizdata[0].scope_identifiers
+
+  access_token_validity = 60
+
+  token_validity_units {
+    access_token = "minutes"
+  }
+}
+
 # Someone has to be able to sign in. "Individual sign-in" is Cowork's model, so
 # a client-credentials machine token would not exercise the flow the connector
 # actually performs.
@@ -173,8 +212,14 @@ locals {
     BIZDATA_OAUTH_ISSUER   = local.cognito_issuer
     BIZDATA_OAUTH_JWKS_URL = "${local.cognito_issuer}/.well-known/jwks.json"
 
-    BIZDATA_OAUTH_CLIENT_ID = aws_cognito_user_pool_client.cowork[0].id
-    BIZDATA_OAUTH_SCOPES    = join(",", aws_cognito_resource_server.bizdata[0].scope_identifiers)
+    # Both clients, comma separated. A token is only accepted if it was issued to
+    # one of them, so a correctly-signed token minted for some other app in the
+    # same pool is still rejected.
+    BIZDATA_OAUTH_CLIENT_ID = join(",", [
+      aws_cognito_user_pool_client.cowork[0].id,
+      aws_cognito_user_pool_client.machine[0].id,
+    ])
+    BIZDATA_OAUTH_SCOPES = join(",", aws_cognito_resource_server.bizdata[0].scope_identifiers)
 
     BIZDATA_RESOURCE_URL = "${aws_apigatewayv2_api.main.api_endpoint}/mcp"
 

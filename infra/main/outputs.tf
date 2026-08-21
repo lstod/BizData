@@ -100,3 +100,34 @@ output "demo_user_password" {
   description = "Password for the demo user."
   sensitive   = true
 }
+
+output "auth_exports" {
+  description = <<-EOT
+    Environment for scripts/check_auth.py, which proves the authentication chain without a
+    browser. Use with: eval "$(terraform -chdir=infra/main output -raw auth_exports)"
+
+    Sensitive because it carries the test client's secret. That client can do
+    client_credentials only, so the worst it can mint is a token with bizdata/read against
+    a database of synthetic rows — but it is a credential and is marked as one.
+  EOT
+  sensitive   = true
+  value = var.enable_auth ? join("\n", [
+    "export BIZDATA_OAUTH_ISSUER=${local.cognito_issuer}",
+    "export BIZDATA_OAUTH_TOKEN_ENDPOINT=${local.cognito_domain}/oauth2/token",
+    "export BIZDATA_OAUTH_AUTHORIZATION_ENDPOINT=${local.cognito_domain}/oauth2/authorize",
+    "export BIZDATA_OAUTH_SCOPES=${join(",", aws_cognito_resource_server.bizdata[0].scope_identifiers)}",
+    "export BIZDATA_TEST_CLIENT_ID=${aws_cognito_user_pool_client.machine[0].id}",
+    "export BIZDATA_TEST_CLIENT_SECRET=${aws_cognito_user_pool_client.machine[0].client_secret}",
+  ]) : ""
+}
+
+output "cowork_connector_settings" {
+  description = "Everything Cowork's custom connector form asks for, in one place."
+  sensitive   = true
+  value = var.enable_auth ? join("\n", [
+    "URL                  ${aws_apigatewayv2_api.main.api_endpoint}/mcp",
+    "OAuth Client ID      ${aws_cognito_user_pool_client.cowork[0].id}",
+    "OAuth Client Secret  ${aws_cognito_user_pool_client.cowork[0].client_secret}",
+    "Sign in as           ${var.demo_user_email} / ${random_password.demo_user[0].result}",
+  ]) : "enable_auth is false; the endpoint is open and the connector needs no client."
+}

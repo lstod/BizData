@@ -1,0 +1,19 @@
+# Data API type parity with psycopg, captured 2026-08-21T03:55:52Z.
+#
+# scripts/check_tools.py runs 177 assertions written at step 3 against local Postgres.
+# Step 5 added one flag to that file, --backend, and changed nothing else. Below is the
+# diff between the two runs on the same seed: local Docker Postgres 16.10 through psycopg,
+# and Aurora Serverless v2 PostgreSQL 16.10 through the RDS Data API.
+#
+# The Data API returns numeric and date as strings where psycopg returns Decimal and
+# datetime.date. server/dataapi.py coerces them back through columnMetadata typeName.
+# This diff is how that coercion is proved rather than assumed.
+
+$ diff <(check_tools --backend local) <(check_tools --backend aws)
+178c178
+< 175  t   run_id: the server mints one when the caller omits it                      req-679713540a24, echoed in the response
+---
+> 175  t   run_id: the server mints one when the caller omits it                      req-6b17e7c5835e, echoed in the response
+
+# The only difference across 178 lines is a run_id, which the server mints randomly when
+# the caller omits one. Assertion 175 exists to prove exactly that it is random.

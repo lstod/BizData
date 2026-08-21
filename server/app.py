@@ -37,7 +37,7 @@ import sys
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from server import reqlog, toollog
+from server import auth, oauth_metadata, reqlog, toollog
 from server.tools import TOOLS
 
 INSTRUCTIONS = """
@@ -60,15 +60,50 @@ projection, report it as a data note, and never describe it as a delivery slowdo
 """.strip()
 
 
+# Authentication, which is present only when the environment asks for it.
+#
+# Absent, this is the same open server it has always been and `uvicorn server.app:app`
+# needs no AWS account, no Cognito pool and no network. Present, the SDK wraps /mcp in
+# RequireAuthMiddleware and serves RFC 9728 protected resource metadata, and the only
+# BizData-specific part is the verifier that knows how to read a Cognito token.
+#
+# The switch is an environment variable rather than two code paths because the deployed
+# server has to be the same server. See server/auth.py.
+auth_settings = None
+token_verifier = None
+cognito = None
+
+if auth.enabled():
+    from mcp.server.auth.settings import AuthSettings
+
+    cognito = auth.CognitoSettings.from_env()
+    token_verifier = auth.CognitoTokenVerifier(cognito)
+    auth_settings = AuthSettings(
+        # In "cognito" mode this is Cognito's own issuer, and the client is expected to
+        # find its metadata through OIDC discovery. In "self" mode it is this server, which
+        # then has to serve an RFC 8414 document — see server/oauth_metadata.py.
+        issuer_url=cognito.issuer if cognito.as_mode == "cognito" else cognito.resource_url.removesuffix("/mcp"),
+        resource_server_url=cognito.resource_url,
+        # Enforced by the SDK rather than by the verifier, so that an insufficient-scope
+        # rejection comes back with the status and WWW-Authenticate header a client expects.
+        required_scopes=list(cognito.scopes) or None,
+    )
+
+
 mcp = MCPServer(
     "bizdata",
     title="BizData delivery and margin review",
     instructions=INSTRUCTIONS,
     version="0.3.0",
+    auth=auth_settings,
+    token_verifier=token_verifier,
 )
 
 for tool in TOOLS:
     mcp.add_tool(tool)
+
+if cognito is not None:
+    oauth_metadata.register(mcp, cognito)
 
 
 # stdout locally; at step 5 the Lambda's stdout is CloudWatch Logs and this line is what

@@ -5,6 +5,11 @@
 #           -> RDS Data API -> Aurora Serverless v2 PostgreSQL 16.10 at min 0 ACU.
 #
 # The role executing the SQL is mcp_readonly, which holds SELECT and nothing else.
+#
+# Captured while the endpoint was still open, which is the sequence the build plan chose:
+# prove the deployment first, then put Cognito in front of it. The same call against the
+# now-authenticated endpoint is assertion 11 in step-5-auth-chain.txt, and returns the same
+# total_count of 18. An unauthenticated request to this URL today returns 401.
 
 $ curl -s -X POST "$BIZDATA_MCP_ENDPOINT" \
     -H "content-type: application/json" \

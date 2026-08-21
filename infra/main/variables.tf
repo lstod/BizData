@@ -63,13 +63,19 @@ variable "enable_auth" {
   description = <<-EOT
     Whether to create Cognito and put the server behind a bearer token.
 
-    False for the first apply, on purpose. The day-5 gate is a deployed server
-    answering a real tool call, and proving that before OAuth goes on the critical
-    path is the risk ordering the build plan chose. Flip to true once the endpoint
-    is known to work; see infra/main/cognito.tf.
+    It defaulted to false for the first apply, on purpose: the day-5 gate is a
+    deployed server answering a real tool call, and proving that before OAuth went
+    on the critical path was the risk ordering the build plan chose. That apply
+    happened, the endpoint was proven with curl, and the evidence is in
+    docs/evidence/step-5-deployed-tool-call.json.
+
+    The default is now true because that is what is deployed, and a variable whose
+    default contradicts the live account is a `terraform apply` away from deleting a
+    user pool by accident. Set it false to go back to an open endpoint — which is
+    also the fallback if a client turns out not to be able to discover Cognito.
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "oauth_as_mode" {
