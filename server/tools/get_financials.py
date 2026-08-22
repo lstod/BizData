@@ -66,8 +66,8 @@ def get_financials(
 
     Returns cumulative billing and cost through the period with margin and realisation
     computed in SQL, plus days sales outstanding measured against this client's own payment
-    history rather than a fixed threshold. Call it for engagements over 70% burn or not in
-    the green band, alongside get_engagement_burn. Margin and burn are measured
+    history rather than a fixed threshold. Call it alongside get_engagement_burn, for the
+    same engagements and on the same triggers. Margin and burn are measured
     independently and are not reconciled against each other: an engagement can show healthy
     burn and negative margin at the same time, and both are true.
 

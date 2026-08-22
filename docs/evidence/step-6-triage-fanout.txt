@@ -1,0 +1,69 @@
+Step 6 — what the widened triage filter reaches, and what the old one did not
+Captured 2026-08-21, local Postgres, all seventeen fixture seeds.
+
+The step-5 filter was `burn_pct > 70 OR health_band != green`, applied to the
+list_engagements rows. Step 6 adds two triggers, both readable from the same row:
+person_concentration_pct > 70 (new column) and end_date on or before the period end.
+
+SEED 42 — the demo portfolio, engagement by engagement
+
+   id    burn band      conc end_date     old  new  added by
+    2    29.1 green     55.5 2026-08-21   .    x    ended in period
+    3    68.3 green     46.2 2026-10-31   .    .    
+    5    65.1 amber     24.8 2026-10-10   x    x    
+    7    45.4 green     45.0 2027-02-27   .    .    
+    8   131.0 amber     48.9 2027-05-12   x    x    
+    9   124.5 amber     54.1 2026-11-10   x    x    
+   11    57.1 green     44.7 2027-05-02   .    .    
+   12    67.5 green     85.4 2026-09-24   .    x    concentration
+   13    65.5 green     63.6 2026-12-08   .    .    
+   15    76.1 green     50.2 2026-10-16   x    x    
+   16    32.0 green     41.7 2027-03-09   .    .    
+   18    68.8 green     53.2 2026-12-04   .    .    
+   19    86.9 green     59.5 2026-10-10   x    x    
+   20    56.2 amber     33.0 2027-04-16   x    x    
+   22    58.9 amber     33.1 2027-01-25   x    x    
+   23    37.8 green     55.7 2027-01-11   .    .    
+   25    80.6 green     53.7 2026-10-25   x    x    
+   29    56.6 green     37.1 2026-12-26   .    .    
+
+  old filter: 8 of 18 -> [5, 8, 9, 15, 19, 20, 22, 25]
+  new filter: 10 of 18 -> [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+  added:      [2, 12]
+
+  mess case 8 anchor, key person concentration: engagement 12
+  mess case 6 anchor, ends inside the period:   engagement 2
+
+Both anchors are in the added set and neither is in the old one. Case 7 needs no
+filter at all: the coverage block rides on the portfolio-wide get_time_summary call
+the skill now makes before any analysis, which the step-5 client never made.
+
+===========================================================================
+
+ACROSS ALL SEVENTEEN SEEDS
+
+   seed  active  old  new  case 8 in old  case 8 in new  case 6 in old  case 6 in new
+     42      18    8   10             NO            yes             NO            yes
+     43      18    8    9             NO            yes            yes            yes
+   9001      18    8   11             NO            yes            yes            yes
+   9002      18    9   13             NO            yes             NO            yes
+   9003      18    9   11             NO            yes             NO            yes
+   9004      18   12   15             NO            yes             NO            yes
+   9005      18    7    9             NO            yes            yes            yes
+   9006      18    8   11             NO            yes            yes            yes
+   9007      18    8   11             NO            yes             NO            yes
+   9008      18    9   11             NO            yes             NO            yes
+   9009      18   10   11            yes            yes            yes            yes
+   9010      18   11   12             NO            yes            yes            yes
+   9011      18   11   13            yes            yes            yes            yes
+   9012      18    8    9             NO            yes            yes            yes
+   9013      18    8   10             NO            yes            yes            yes
+   9014      18    9   12             NO            yes            yes            yes
+   9015      18    6    7             NO            yes            yes            yes
+
+  Engagements examined, summed over the seed set: 149 under the old filter,
+  185 under the new one. The pack looks at 36 more engagements
+  across seventeen portfolios, and never fewer.
+
+  Mess case 8 was invisible to the old filter on 15 of 17 seeds, case 6 on 6.
+  Both are caught on all seventeen by the new one.

@@ -1,0 +1,143 @@
+Cowork running assemble-delivery-pack against the deployed connector
+Captured 2026-08-21 from /aws/lambda/bizdata-mcp-server.
+Prompt, both runs, naming neither the skill nor any tool:
+  "Run the monthly delivery and margin review for August 2026, as of 2026-08-31."
+
+READ THE FINDING BELOW BEFORE THE CHAINS. Both runs went out against a Lambda
+last deployed at 03:54Z, which is before step 6 existed, so the endpoint did not
+return the person_concentration_pct column the skill screens on. That is the
+cause of everything unusual in both chains, and it is not what it first looked
+like.
+
+==========================================================================
+RUN 1 — before the selection step was rewritten
+02:22:56Z to 02:23:54Z, 22 calls, one run_id: delivery-review-2026-08
+
+  1x  list_engagements    {"as_of_date": "2026-08-31", "status": "active", "client_id": null, "cursor"
+  1x  get_time_summary    {"period_start": "2026-08-01", "period_end": "2026-08-31", "group_by": "enga
+  11x  get_engagement_burn ids [2, 5, 8, 9, 15, 19, 20, 22, 25]
+  9x  get_financials      ids [2, 5, 8, 9, 15, 19, 20, 22, 25]
+
+  the four triggers select: [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+  get_financials went to:   [2, 5, 8, 9, 15, 19, 20, 22, 25]   MISMATCH
+
+==========================================================================
+RUN 2 — after it, four named lists written out before any call
+02:32:24Z to 02:33:22Z, 30 calls, one run_id: delivery-review-2026-08
+
+  1x  list_engagements    {"as_of_date": "2026-08-31", "status": "active", "client_id": null, "cursor"
+  1x  get_time_summary    {"period_start": "2026-08-01", "period_end": "2026-08-31", "group_by": "enga
+  18x  get_engagement_burn ids [2, 3, 5, 7, 8, 9, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 25, 29]
+  10x  get_financials      ids [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+
+  the four triggers select: [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+  get_financials went to:   [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]   exact
+
+==========================================================================
+THE FINDING: THE SKILL WAS AHEAD OF THE DEPLOYMENT
+
+person_concentration_pct was added to list_engagements at step 6 and verified
+across seventeen seeds on local Postgres and over the Data API. It was never
+deployed. The Lambda serving the connector was last modified 2026-08-21T03:54Z,
+the column landed in the working tree at 01:48Z the next day, and nobody ran
+scripts/package_lambda.sh in between.
+
+So both runs asked a live endpoint for a field it did not return, and the skill
+told them to screen on it. What the two runs show is two different ways a model
+handles an instruction it cannot follow.
+
+RUN 1 DROPPED THE RULE SILENTLY. Trigger C screens on a field that was not in the
+response, so C contributed nothing and engagement 12 — 85.4% concentration, 67.5%
+burn, green band, the only engagement on this seed above the threshold — was never
+examined. A, B and D were exactly right, engagement 2 came in on D, and the output
+gave no sign that a quarter of the selection rule had not run. That is the worse
+failure of the two by a distance: a pack that is quietly missing a rule looks
+exactly like a pack where the rule found nothing.
+
+RUN 2 REPORTED IT AND WORKED AROUND IT. The only change was to the selection step:
+four named lists, A/B/C/D, written out before any call, plus a line saying that
+shortcutting to A and B is the natural filter and is wrong. This time the model
+said, in its own words:
+
+  "The skill screens trigger C off person_concentration_pct on the list_engagements
+   rows — that field isn't in the response. It's only returned by
+   get_engagement_burn, so I'm pulling burn for the remaining nine to screen C
+   properly rather than skipping it."
+
+Which is why there are 18 get_engagement_burn calls rather than 10. They are not
+an over-pull, they are the compensation: ten for the A/B/D union and eight to
+screen C on the engagements the union had not already covered. It found
+engagement 12 and reported it as the catch of the run. get_financials then went to
+exactly the ten the four triggers select, which is the check that the union was
+computed correctly rather than approximated.
+
+The first reading of these two chains — that run 1 skimmed a markdown table and
+run 2 got greedy — was wrong on both halves, and only fell apart once the client's
+own narration was read next to the log. The log alone supports the wrong story
+comfortably.
+
+WHAT IT SAYS ABOUT THE SKILL
+
+The rewrite is worth keeping, and for a different reason than it was written. It
+did not make the model notice a table row. It made a rule explicit enough that the
+model could tell it was unable to follow it, and say so, instead of dropping it.
+An instruction stated as "here is a list you must write out" fails loudly; the same
+instruction as one row of a table fails silently.
+
+TWO MORE DEVIATIONS THE CLIENT REPORTED, BOTH REAL
+
+  the bundled script   Only SKILL.md reached Cowork. scripts/build_workbook.py was
+                       in the uploaded bundle and not in the synced one, so the
+                       model wrote a layout-only equivalent and said so. That is a
+                       packaging question and it belongs to step 10, which already
+                       owns "how does Cowork want a remote connector bundled".
+  scope-escalation     Not available, because it is step 8. The client applied RED
+                       and NEEDS REVIEW criteria of its own and flagged that the
+                       judgment call was not ours. Correct behaviour, and it is the
+                       argument for step 8 existing.
+
+THE WORKBOOK RUN 2 PRODUCED
+
+docs/evidence/step-6-engagement-book-cowork.xlsx, built by the model's own script
+rather than the bundled one, checked here against the same assertions the harness
+applies:
+
+  five tabs, in the house order                              yes
+  673 text cells scanned for delivery-slowdown wording       clean
+  the week of 2026-08-10 named as a data note                yes
+  "filing artifact" stated                                   yes
+  exclusion from run rates stated                            yes
+  engagement 12's 85.4% concentration in the book            yes
+  engagement_id the first column of Engagements              yes
+
+RESOLVED
+
+scripts/package_lambda.sh and terraform apply, 2026-08-22T02:59:57Z. The deployed
+endpoint now returns person_concentration_pct on all 18 rows over HTTPS through the
+Cognito chain, engagement 12 at 85.4% across 2 people, and check_auth.py is 14 of
+14 unchanged. A third run would show trigger C screening from the triage row with
+no compensating burn calls, which is the behaviour the skill was written for.
+
+==========================================================================
+POSTSCRIPT: THE TWO WORKBOOKS SIDE BY SIDE
+
+Both runs produced a deliverable, and comparing them is the clearest statement of
+what a silently dropped rule costs.
+
+  step-6-engagement-book-cowork-run1.xlsx    trigger C dropped
+  step-6-engagement-book-cowork.xlsx         trigger C screened via burn calls
+
+Run 1's book does not contain the string "85.4" anywhere in it. Engagement 12's
+key-person concentration is not merely unexamined, it never reached the artifact —
+no flag, no caveat, no note that a screening rule had not been applied. The word
+"concentration" does appear, as a column heading over blanks, which is worse than
+its absence: the book looks like it checked and found nothing.
+
+Both books name the 2026-08-10 gap week correctly, so the coverage rule survived
+the missing field. Only the rule that depended on the undeployed column failed.
+
+The two also differ in layout — run 1 puts a title in row 1 of Engagements, run 2
+puts headers there — because each model wrote its own builder in the absence of the
+bundled script. That is a second reason the packaging question at step 10 matters:
+without the script, the house format is whatever the model chose that day, and
+step 7 is about the house format being the same every month.

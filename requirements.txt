@@ -18,3 +18,10 @@ uvicorn==0.52.4
 # own boto3, so this pin is for the seed script and the bootstrap script running here;
 # requirements-lambda.txt deliberately leaves it out of the deployment package.
 boto3==1.42.51
+
+# The workbook writer, step 6. It is the only dependency of
+# plugin/skills/assemble-delivery-pack/scripts/build_workbook.py, which runs in Cowork's
+# code execution sandbox rather than this virtualenv — that script may import openpyxl and
+# the standard library and nothing else. The pin here is for scripts/check_pack.py, which
+# runs the same script locally and asserts on what it produced.
+openpyxl==3.1.5

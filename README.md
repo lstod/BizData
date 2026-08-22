@@ -9,8 +9,10 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 2 of 14 are done. The
-architecture write-up, the security posture and the demo land at step 11.
+assemble the pack. **Build in progress** — steps 0 through 6 and 14 of 14 are done. The
+server is deployed on AWS behind Cognito and answering tool calls from a Cowork connector;
+the first Skill produces the engagement book. The architecture write-up, the security
+posture and the demo land at step 11.
 
 ## All of the data here is synthetic
 
@@ -81,7 +83,7 @@ number is wrong" a question with an answer.
 
 | Tool | Answers |
 | --- | --- |
-| `list_engagements` | Every engagement live in the period with its burn and health band. Triage in one call. |
+| `list_engagements` | Every engagement live in the period with its burn, health band and key-person concentration. Triage in one call. |
 | `get_engagement_burn` | Hours against the SOW ceiling, the trailing run rate, and a projection labelled with how far it can be trusted. |
 | `get_time_summary` | Forty thousand entries aggregated, with data quality and weekly reporting coverage alongside. |
 | `get_financials` | Invoiced, paid, unbilled work in progress, margin, and payment behaviour against the client's own history. |
@@ -109,6 +111,43 @@ curl -s -X POST http://127.0.0.1:8000/mcp \
        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
        "io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
+
+## Assembling the pack
+
+`plugin/skills/assemble-delivery-pack/` is the first of three Skills. It fixes the order the
+tools are called in, the rule for deciding which engagements get looked at properly, and how
+`engagement-book-YYYY-MM.xlsx` gets written. The workbook builder it bundles contains no
+arithmetic at all: every cell is either a field copied from a tool response or an Excel formula
+over another tab, which is how "no figure in front of a partner was calculated by a model"
+stays true all the way to the file on disk.
+
+The rule worth reading is the coverage one. Before any burn figure is read, the Skill makes one
+portfolio-wide `get_time_summary` call and checks `pct_active_reporting`. A week below 60%
+coverage is a filing artifact — it is already excluded from every run rate in SQL, it is
+reported as a data note, and it is never described as a delivery slowdown.
+
+That rule exists because of a real miss. After the `ceiling_hours` fix the portfolio got
+healthier, and a connector review filtering on `burn_pct > 70 OR health_band != green` examined
+8 of 18 engagements and never surfaced three of the seeded mess cases. Two of them needed only
+an order of operations. The third needed a column:
+
+> A triage tool has to carry every dimension the triage rule is allowed to mention.
+
+Key-person concentration lived only on `get_engagement_burn` — the call the filter was deciding
+whether to make. So an engagement 85% delivered by one person, sitting at 67% burn in the green
+band, was invisible to the thing choosing what to examine. It went unexamined on 15 of the 17
+fixture seeds. `list_engagements` now carries it.
+
+```bash
+.venv/bin/python scripts/check_pack.py             # every reserved seed
+.venv/bin/python scripts/check_pack.py --seed 42 -v --keep /tmp/pack
+```
+
+That follows the Skill's order of operations against the in-memory server, runs the bundled
+builder with the command line the Skill prescribes, then re-reads the workbook off disk and
+asserts on it — that paging reached `total_count`, that the examine set reaches the mess cases a
+burn threshold cannot, that the run rates in the book are the tools' own figures, and that no
+cell anywhere calls the low-coverage week a slowdown. 31 assertions per seed.
 
 ## Engagement health is a number, not a threshold in a prompt
 
@@ -193,9 +232,15 @@ db/
   checks/                 mess case assertions, determinism checksums, health assertions
 server/
   app.py                  the MCP server; uvicorn server.app:app
-  db.py                   local Postgres now, RDS Data API at step 5
+  db.py                   local Postgres, or the RDS Data API
+  auth.py                 Cognito token verification, ~60 lines
   toollog.py              one JSON line per call, seven fields
   tools/                  the four read tools, one module each
+plugin/
+  skills/                 the Skills, one directory each
+    assemble-delivery-pack/
+      SKILL.md            order of operations, the coverage rule, stop conditions
+      scripts/            build_workbook.py: five tabs, no arithmetic
 infra/
   bootstrap/              Terraform state bucket and the budget alarm, local state
   main/                   everything else, S3 backend with native locking
@@ -204,6 +249,7 @@ scripts/
   generator.py            the deterministic portfolio
   writers.py              local Postgres now, RDS Data API at step 5
   check_tools.py          the tools' Done-when conditions, as assertions
+  check_pack.py           the pack's, asserted against the workbook on disk
   sweep.sh                the SQL checks across every reserved seed
 docker-compose.yml        local Postgres for steps 1 to 4
 ```

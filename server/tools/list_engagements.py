@@ -5,6 +5,12 @@ The one design decision in this file worth explaining out loud, because it is th
 SQL and come back on the row. The first version of this tool returned engagement metadata
 only, which meant deciding what to look at cost a fan-out of thirty get_engagement_burn
 calls. Now it costs one.
+
+Step 6 added person_concentration_pct and people_count for the same reason, and the reason
+is worth keeping because it was found rather than designed. A connector review filtered on
+burn or band examined 8 of 18 engagements and missed mess case 8 entirely — 85% of an
+engagement's hours from one person, at 67% burn, in the green band. The filter was right and
+the row was too thin to express what it was filtering on.
 """
 
 from __future__ import annotations
@@ -36,6 +42,16 @@ class Engagement(BaseModel):
     days_remaining: int = Field(description="Contract days left at the period end. Zero once ended.")
     hours_to_date: float
     burn_pct: float = Field(description="Hours to date against ceiling hours, 0 to 100 and beyond.")
+    person_concentration_pct: float | None = Field(
+        default=None,
+        description=(
+            "Share of the period's hours from the single largest contributor. Null when the "
+            "engagement logged no hours in the period."
+        ),
+    )
+    people_count: int | None = Field(
+        default=None, description="How many people logged time against it in the period."
+    )
 
     health_score: float | None = Field(default=None, description="100 minus weighted risk.")
     health_band: str | None = Field(default=None, description="The band the score falls in.")
@@ -70,10 +86,14 @@ def list_engagements(
 
     Returns one row per engagement that was contractually live in the month containing
     as_of_date, with burn percentage, health score and band, movement against the
-    engagement's own prior month, and its top risk factor. Use this first in any delivery
-    review, and page with next_cursor until returned_count sums to total_count: a partial
-    list silently produces a clean-looking pack, and the omitted engagement is the one that
-    was in trouble.
+    engagement's own prior month, its top risk factor, and key-person concentration. Use
+    this first in any delivery review, and page with next_cursor until returned_count sums
+    to total_count: a partial list silently produces a clean-looking pack, and the omitted
+    engagement is the one that was in trouble.
+
+    Triage from these rows rather than from burn alone. An engagement can be inside its
+    ceiling and in the green band while one person is 85% of its hours, or while its
+    contract ended part way through the period, and neither risk is visible in burn_pct.
 
     Args:
         as_of_date: ISO date. The month containing it is the period measured.

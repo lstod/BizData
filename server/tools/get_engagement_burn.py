@@ -95,8 +95,13 @@ def get_engagement_burn(
     the trailing weeks contain a gap, when fewer than three readable weeks are available, or
     when more than 10% of the period's entries were filed after the period closed. Where
     confidence is low, report the projection with its reason attached rather than acting on
-    it. Call this for engagements over 70% burn or not in the green band, rather than for
-    every engagement.
+    it.
+
+    Call this for an engagement over 70% burn, outside the green band, above 70% person
+    concentration, or whose contract ended inside the period, rather than for every
+    engagement. All four are readable from list_engagements. Burn and band alone are not
+    enough: an engagement can sit inside its ceiling in the green band while one person is
+    most of its delivery.
 
     Args:
         engagement_id: From list_engagements.

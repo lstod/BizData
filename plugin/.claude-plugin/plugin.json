@@ -1,0 +1,8 @@
+{
+  "name": "bizdata-delivery-review",
+  "version": "0.1.0",
+  "description": "The monthly delivery and margin review for a professional services portfolio: assemble the pack, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
+  "author": {
+    "name": "BizData"
+  }
+}

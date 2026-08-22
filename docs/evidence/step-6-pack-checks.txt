@@ -1,0 +1,93 @@
+Step 6 pack checks — scripts/check_pack.py
+Captured 2026-08-21.
+
+SEED 42, LOCAL POSTGRES, VERBOSE
+
+seed 42
+     ok  assertion                                                                  detail
+  1  t   skill: SKILL.md exists                                                     plugin/skills/assemble-delivery-pack/SKILL.md
+  2  t   skill: frontmatter names the skill and describes when to use it            525 chars of frontmatter
+  3  t   skill: states the concentration trigger                                    present
+  4  t   skill: states the ended-inside-the-period trigger                          present
+  5  t   skill: states the portfolio-wide coverage call                             present
+  6  t   skill: states the no-arithmetic rule                                       present
+  7  t   skill: states the ceiling rule                                             present
+  8  t   skill: forbids calling the low-coverage week a delivery slowdown, in those stated as a prohibition
+  9  t   pack: paging reached total_count before any analysis began                 18 of 18 over 4 pages
+ 10  t   pack: one portfolio-wide time summary, not one per engagement              unscoped, grouped by engagement,week
+ 11  t   pack: detail was pulled for a subset rather than the whole portfolio       10 of 18 engagements examined
+ 12  t   build_workbook ran and wrote the workbook                                  /tmp/step6-keep/engagement-book-2026-08-seed-42.xlsx: 18 engagements, 75 time detail rows, 0 exc
+ 13  t   workbook: five tabs, in the house order                                    Summary, Engagements, Time Detail, Exceptions, Data Quality
+ 14  t   workbook: every engagement in the portfolio reached the book               18 rows for total_count 18
+ 15  t   workbook: every row carries its engagement_id                              18 of 18
+ 16  t   workbook: the examined engagements are the ones the triggers chose         10 of 18 examined
+ 17  t   mess case 8: the concentrated engagement was examined                      engagement 12 at 85.4% concentration, burn 67.5%, band green
+ 18  t   mess case 6: the engagement that ended inside the period was examined      engagement 2 ended 2026-08-21, burn 29.1%
+ 19  t   workbook: run rates and burn are the tools' figures, not re-derived ones   every examined row matches its tool response
+ 20  t   workbook: every low-confidence projection carries its reason               1 low-confidence projection(s), all labelled
+ 21  t   workbook: portfolio totals on Summary are formulas over the Engagements ta 10 formula(s) referencing Engagements, 11 in total
+ 22  t   workbook: Summary carries the scoring model version                        v1.0
+ 23  t   workbook: the gap week's rows are present in Time Detail and flagged, not  3 row(s) for the week of 2026-08-10, all flagged
+ 24  t   mess case 7: the low-coverage week appears on Data Quality as a data note  week of 2026-08-10 noted
+ 25  t   mess case 7: the note says the week is excluded from run rates and project stated
+ 26  t   workbook: the two data blocks stay separate on the tab                     both sections present
+ 27  t   mess case 7: nothing in the pack calls the week a delivery slowdown        no banned wording anywhere in the workbook
+ 28  t   workbook: an Exceptions tab with nothing on it says so                     stated rather than left blank
+ 29  t   workbook: a flagged engagement reaches the Exceptions tab with its decisio 1 row(s), owner engagement lead
+ 30  t   build_workbook refuses a time summary scoped to some engagements           error: time_summary was scoped to specific engagement_ids, so its data_completeness block measur
+ 31  t   build_workbook refuses an empty engagement list                            error: engagements is empty. A pack with no engagements is a failed run, not an empty month; sto
+seed 42: 31 of 31 assertions passed
+
+
+all seeds pass
+
+===================================================================
+ALL SEVENTEEN FIXTURE SEEDS, LOCAL POSTGRES
+
+seed 42: 31 of 31 assertions passed
+seed 43: 31 of 31 assertions passed
+seed 9001: 31 of 31 assertions passed
+seed 9002: 31 of 31 assertions passed
+seed 9003: 31 of 31 assertions passed
+seed 9004: 31 of 31 assertions passed
+seed 9005: 31 of 31 assertions passed
+seed 9006: 31 of 31 assertions passed
+seed 9007: 31 of 31 assertions passed
+seed 9008: 31 of 31 assertions passed
+seed 9009: 31 of 31 assertions passed
+seed 9010: 31 of 31 assertions passed
+seed 9011: 31 of 31 assertions passed
+seed 9012: 31 of 31 assertions passed
+seed 9013: 31 of 31 assertions passed
+seed 9014: 31 of 31 assertions passed
+seed 9015: 31 of 31 assertions passed
+
+527 assertions in total, no failures.
+
+===================================================================
+THE SAME SEQUENCE OVER THE RDS DATA API
+
+  scripts/check_pack.py --backend aws --no-reseed --seed 42
+
+seed 42: 31 of 31 assertions passed
+
+One swapped adapter, the same assertions, none of them touched. The two runs
+were then compared rather than merely both passing:
+
+  pack.json          IDENTICAL, byte for byte — every figure the workbook is built from
+  the workbook       IDENTICAL, all 1,731 cells across the five tabs
+
+The step-5 backend parity run diffed to a single randomly minted run_id. This one
+diffs to nothing at all, because check_pack.py names its own run. Local Postgres and
+Aurora produce the same engagement book cell for cell, including the Summary formulas
+and the coverage data note.
+
+===================================================================
+TOOL CHECKS AFTER THE list_engagements CHANGE
+
+  scripts/check_tools.py                                  17 seeds, 180 each, 3,060 total
+  scripts/check_tools.py --backend aws --no-reseed --seed 42          180 of 180
+
+177 before the change, 180 after. The three new assertions are that concentration
+comes back on the triage row, that mess case 8 is findable from that row alone, and
+that the triage row and get_engagement_burn report one concentration rather than two.

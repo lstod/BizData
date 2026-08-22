@@ -316,10 +316,12 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks) -> None:
         )
 
         seen: list[int] = [e["engagement_id"] for e in first["engagements"]]
+        triage: dict[int, dict[str, Any]] = {e["engagement_id"]: e for e in first["engagements"]}
         cursor, pages = first["next_cursor"], 1
         while cursor:
             page = await h.call("list_engagements", as_of_date=period_end, status="active", limit=5, cursor=cursor)
             seen += [e["engagement_id"] for e in page["engagements"]]
+            triage.update({e["engagement_id"]: e for e in page["engagements"]})
             cursor, pages = page["next_cursor"], pages + 1
             if pages > 50:
                 break
@@ -343,6 +345,17 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks) -> None:
             "list_engagements: burn and health come back on the row, so triage is one call",
             all(e.get("burn_pct") is not None and e.get("health_band") for e in first["engagements"]),
             "burn_pct and health_band populated",
+        )
+        # Step 6. A triage filter can only fire on what the triage row carries, so
+        # concentration has to be here and not only on the per-engagement call the filter is
+        # deciding whether to make. Null is legitimate for an engagement that logged nothing
+        # in the period, so the assertion is that the portfolio is readable on this axis
+        # rather than that every single row is populated.
+        with_conc = [e for e in triage.values() if e.get("person_concentration_pct") is not None]
+        checks.add(
+            "list_engagements: key person concentration comes back on the row too",
+            len(with_conc) == len(triage) and all(e.get("people_count") for e in with_conc),
+            f"{len(with_conc)} of {len(triage)} rows, people_count alongside",
         )
 
         # ---- mess case 3: silent engagement, low confidence, unasked -----------------
@@ -385,6 +398,26 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks) -> None:
             conc["person_concentration_pct"] is not None
             and abs(conc["person_concentration_pct"] - expected_share) <= 0.2,
             f"engagement {concentrated} at {conc['person_concentration_pct']}%, seeded {expected_share}%",
+        )
+
+        # Step 6, and the reason the column was added. The pack decides what to examine from
+        # list_engagements, so a risk that is only expressible after get_engagement_burn is a
+        # risk the pack never reaches. On seed 42 this engagement sits at 67.5% burn in the
+        # green band and clears no burn-or-band filter that exists.
+        triage_row = triage.get(concentrated, {})
+        checks.add(
+            "mess case 8: the concentrated engagement is findable from the triage call alone",
+            triage_row.get("person_concentration_pct") is not None
+            and abs(triage_row["person_concentration_pct"] - expected_share) <= 0.2,
+            f"engagement {concentrated} at {triage_row.get('person_concentration_pct')}% on the "
+            f"triage row, burn {triage_row.get('burn_pct')}%, band {triage_row.get('health_band')}",
+        )
+        checks.add(
+            "mess case 8: triage and get_engagement_burn report one concentration, not two",
+            triage_row.get("person_concentration_pct") == conc["person_concentration_pct"]
+            and triage_row.get("people_count") == conc["people_count"],
+            f"{triage_row.get('person_concentration_pct')}% over "
+            f"{triage_row.get('people_count')} people from both tools",
         )
 
         # ---- mess case 6: engagement ending mid period -------------------------------

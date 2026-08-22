@@ -5,6 +5,13 @@
 -- fan-out of thirty get_engagement_burn calls just to decide what to look at. burn_pct and
 -- the health band are computed in SQL and come back here, so triage is one call.
 --
+-- person_concentration_pct is on the row for that same reason, added at step 6. Mess case 8
+-- is an engagement 85% delivered by one person while sitting at 67% burn in the green band,
+-- so a fan-out triggered by burn or band never examines it and the continuity risk is
+-- invisible. A triage row that cannot express one of the four risks the portfolio carries
+-- is not a triage row. Both columns come off engagement_burn_v1, which already computed
+-- them for get_engagement_burn, so this costs a projection and no new work.
+--
 -- Paging is keyset on engagement_id rather than an offset. total_count is counted over the
 -- whole filtered set rather than what is left after the cursor, so it does not shrink as
 -- the caller pages — assemble-delivery-pack's rule is to page until returned_count sums to
@@ -48,6 +55,8 @@ filtered as (
         b.days_remaining,
         b.hours_to_date,
         round(100 * b.burn_ratio, 1)            as burn_pct,
+        round(100 * b.person_concentration_ratio, 1) as person_concentration_pct,
+        b.people_count,
         h.health_score,
         h.health_band,
         h.score_delta_vs_prior_period,
