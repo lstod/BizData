@@ -1,0 +1,154 @@
+step 7 — the Cowork run, 2026-08-23
+
+Against the deployed endpoint at commit 449223209570, Aurora holding seed 42, period 2026-08.
+Artifacts banked as step-7-engagement-book-cowork.xlsx and step-7-delivery-review-cowork.pptx.
+
+The prompt was the thin one the run note specifies, and nothing else:
+
+  Produce the August 2026 delivery and margin review pack for the whole portfolio.
+  Use the BizData connector. I want the workbook and the deck.
+
+Three questions were riding on this run: whether a bundled script reaches the sandbox, whether
+trigger C can screen from the triage row without a fan-out, and whether python-pptx exists in
+Cowork at all. All three are answered. A fourth thing turned up that nobody asked.
+
+======================================================================
+1. the packaging question — closed
+======================================================================
+
+Step 6 shipped a Skill as a bare SKILL.md, the bundled builder never arrived, and the model
+wrote its own substitute rather than failing. The fix was to upload the directory zipped. This
+run proves the mechanism rather than assuming it.
+
+Both Skills went up as zips built by scripts/package_skill.sh:
+
+  assemble-delivery-pack/  SKILL.md + scripts/build_workbook.py
+  house-format/            SKILL.md + scripts/build_deck.py + assets/self-check.md
+
+The proof is not that the run said it used them. It is a cell-for-cell diff against the
+workbook check_format.py built locally from the same seed and period:
+
+  Summary         36x 2   1 differing cell   (B3, the run id)
+  Engagements     19x41   0
+  Time Detail     76x10   0
+  Exceptions      11x 6   60
+  Data Quality    23x 6   0
+
+Engagements is 19 rows by 41 columns, identical including the live formula strings — the
+=IF(N(J4)>0,K4/J4,"") in burn_pct and the fee-type branch in margin_pct. A model writing its own
+builder does not reproduce those by coincidence. The one Summary difference is the run id, which
+is supposed to differ. Exceptions is section 4 below.
+
+The deck: 8 slides, 13.33x7.50in, carrying a native COLUMN_CLUSTERED chart part on slide 3 with
+11 client categories. A chart part rather than an image is only reachable through python-pptx,
+so the import succeeded. Conditional formatting survives on Engagements L2:L19 with both cellIs
+rules, and number formats are on the cells: 0.0% on burn, #,##0 on money.
+
+**python-pptx exists in Cowork's sandbox.** That was the last thing that could have forced a
+redesign of the deck builder into raw OOXML over zipfile. It cannot now.
+
+======================================================================
+2. trigger C, which is step 6's outstanding third run — closed
+======================================================================
+
+Step 6's run 2 screened trigger C by calling get_engagement_burn on eight engagements that did
+not need it, because the rewritten instruction had buried person_concentration_pct. The field is
+on the triage row precisely so the filter can fire without the fan-out.
+
+This run ran the coverage check first, then read the four trigger lists straight off the 18
+active rows before calling anything else:
+
+  A  burn > 70      8 (131.0), 9 (124.5), 19 (86.9), 25 (80.6), 15 (76.1)
+  B  not green      5, 8, 9, 20, 22
+  C  concentration > 70    12 (85.4%)
+  D  ended on/before 2026-08-31    2 (ended 2026-08-21)
+
+  union = 2, 5, 8, 9, 12, 15, 19, 20, 22, 25
+
+Ten of eighteen, and the workbook's examined column holds exactly that set. Two of the ten are
+unreachable by burn or band, which is the whole point of the test:
+
+  12  Credit Risk Programme    green band, 67.5% burn, 85.4% concentration, 24 days to end
+   2  Credit Risk Migration    green band, status active, contract ended 2026-08-21
+
+85.4 is in the workbook. Engagement 12 was examined. Neither burn nor band selects it, and no
+compensating burn calls were made to find it — the trigger lists were stated before the burn and
+financials blocks were fetched at all.
+
+======================================================================
+3. the figures, and whether any of them are invented
+======================================================================
+
+Every number on all 8 slides traces to the workbook. Four looked untraceable on a first scan and
+all four are scanning artifacts rather than findings:
+
+  8,081,944 and 3,169,259   Summary A26 and A27 hold 8081943.63 and 3169258.70. Rounded for
+                            display, which is the house format.
+  51.6 and 50.7             margin_pct for engagements 19 and 15. Live formula cells, so the
+                            workbook holds =IF(AI14="",...) and not a number. This is exactly
+                            why check_format.py compares formula operands rather than values.
+
+Slides 2 and 4 are identical to the harness deck's. The three RED detail slides are new — the
+harness pack had no exceptions, so it rendered 6 slides and this run rendered 8, which means the
+variable-length middle of the deck got exercised for the first time. Their figures check out
+against the workbook rows:
+
+  8  hours 1,336.4 / ceiling 1,020.0 / remaining -316.4 / health 53.5 amber / cost 206,373
+  9  hours   971.2 / ceiling   780.0 / remaining -191.2 / health 59.5 amber / cost 160,726
+  5  hours 1,751.5 / ceiling 2,690.0 / remaining  938.5 / health 69.0 amber / cost 156,516
+
+Banned wording: none across all slide text.
+
+Slide 3's chart matches portfolio_client_summary_v1 over the Data API to the decimal — Ashcombe
+Health Partners 51.0 on the slide, 51.0 from the tool call made directly against Aurora before
+the run.
+
+The two designed mess cases were both handled the way the tools intend rather than the way a
+burn threshold would. The week of 2026-08-10 at 16.7% coverage is reported as a filing artifact
+on the Data Quality tab and slide 8, excluded from every run rate and projection. Engagement
+25's projection came back low-confidence with its reason attached — 2 of 4 trailing weeks with
+nothing logged, last entry 2026-08-07 — and was reported rather than acted on.
+
+======================================================================
+4. what turned up: scope-escalation, again
+======================================================================
+
+`scope-escalation` is step 8 and does not exist. Both Skills reference it, build_workbook.py
+writes "No engagement was flagged by scope-escalation this period." into an empty Exceptions tab,
+and build_deck.py treats an empty exceptions list as a real answer rather than a gap.
+
+The run did not take that path. It built ten exception rows itself from the tool figures, using
+RED for over-ceiling and negative-margin cases and NEEDS REVIEW for the rest, and said so:
+
+  "The scope-escalation skill that step 6 calls for is not present in this environment... I built
+   the ten exception rows from the tool figures directly. Worth having a partner sanity-check
+   those flags this month."
+
+That is the 60-cell Exceptions diff in section 1, and it is the same behaviour step 6 recorded
+and judged correct. It is worth being precise about what is good here and what is not.
+
+Good: it declared the substitution rather than passing the judgment off as the tools'. The Cause
+field on all three RED slides reads "not determinable from available data" rather than a story —
+it refused to invent the one thing it could not derive. And slide 7's reading of engagement 5 is
+genuinely right: burn 65.1% is inside the ceiling and the margin is -17.6% on a fixed fee, so
+"the loss is on price, not hours" is the correct call and not one the triggers state.
+
+Not good, and the finding: **the instruction to stop rather than substitute is scoped to
+scripts, and a missing Skill is not a script.** house-format/SKILL.md tells the run to stop if a
+bundled script is absent, which is the step-6 lesson, and that guard did its job here — the
+builders ran. Nothing said anything equivalent about a referenced Skill being absent, so the
+model filled the gap with its own judgment, which is the same failure class in a place the fix
+did not reach.
+
+It is the third form of step 6's gap, and the second one this step predicted would exist without
+knowing where. The first was a Lambda behind its Skill, caught by the commit on serverInfo. The
+second was a view applied to one database and not the other, caught by nothing and found by
+asking. This third one is caught only by the run volunteering it, which is not a check.
+
+Whether it should have refused is a real question rather than an obvious one. Ten exception rows
+built from tool figures and labelled as the model's own judgment is more useful to a partner than
+an empty tab, and the run flagged it for sanity-checking. But it is the pack's only unsourced
+content, and the whole claim of this build is that every figure traces to a tool. Step 8 removes
+the question by existing. Until then the honest statement is that the Exceptions tab and the
+three RED slides are the model's assessment, not the tools', and they are the only part of the
+pack that is.
