@@ -37,7 +37,7 @@ import sys
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
-from server import auth, oauth_metadata, reqlog, toollog
+from server import auth, build_info, oauth_metadata, reqlog, toollog
 from server.tools import TOOLS
 
 INSTRUCTIONS = """
@@ -94,7 +94,10 @@ mcp = MCPServer(
     "bizdata",
     title="BizData delivery and margin review",
     instructions=INSTRUCTIONS,
-    version="0.3.0",
+    # Release plus the commit it was built from, so a caller can tell whether the endpoint is
+    # answering with the code in their checkout. Step 6 shipped a Skill against a Lambda four
+    # steps behind it and every harness passed; see server/build_info.py.
+    version=build_info.version(),
     auth=auth_settings,
     token_verifier=token_verifier,
 )

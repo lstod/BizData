@@ -48,6 +48,7 @@ POST_LOAD_PATHS = (
     REPO_ROOT / "db" / "views" / "engagement_burn_v1.sql",
     REPO_ROOT / "db" / "views" / "engagement_financials_v1.sql",
     REPO_ROOT / "db" / "views" / "engagement_health_v1.sql",
+    REPO_ROOT / "db" / "views" / "portfolio_summary_v1.sql",
 )
 
 PERIOD_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -69,6 +70,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-schema",
         action="store_true",
         help="skip applying db/schema.sql, which otherwise drops and recreates every table",
+    )
+    parser.add_argument(
+        "--views-only",
+        action="store_true",
+        help="apply db/views/ and the scoring weights, load no rows; for adding a view to a "
+             "database that already holds the right data",
     )
     parser.add_argument(
         "--mess-report",
@@ -96,13 +103,19 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(str(exc)) from None
 
     try:
-        if not args.no_schema:
-            writer.apply_sql(SCHEMA_PATH.read_text())
+        # --views-only exists for one situation, and step 7 is it: a new view has to reach a
+        # database that already holds the right rows. Against Aurora the alternative is
+        # pushing forty thousand time entries back over the Data API to change nothing, which
+        # is slow enough that it gets skipped, and a view that gets skipped is the deployment
+        # gap step 6 already paid for once. `create or replace view` makes this idempotent.
+        if not args.views_only:
+            if not args.no_schema:
+                writer.apply_sql(SCHEMA_PATH.read_text())
 
-        counts = {}
-        for table in TABLE_ORDER:
-            rows = getattr(portfolio, table)
-            counts[table] = writer.load(table, COLUMNS[table], rows)
+            counts = {}
+            for table in TABLE_ORDER:
+                rows = getattr(portfolio, table)
+                counts[table] = writer.load(table, COLUMNS[table], rows)
 
         for path in POST_LOAD_PATHS:
             writer.apply_sql(path.read_text())
@@ -112,9 +125,12 @@ def main(argv: list[str] | None = None) -> int:
     loaded = time.monotonic()
 
     print(f"seed {args.seed}, period {args.period}")
-    print(f"window {portfolio.window_start} to {portfolio.window_end}")
-    for table in TABLE_ORDER:
-        print(f"  {table:<16} {counts[table]:>7,}")
+    if args.views_only:
+        print("views only, no rows loaded")
+    else:
+        print(f"window {portfolio.window_start} to {portfolio.window_end}")
+        for table in TABLE_ORDER:
+            print(f"  {table:<16} {counts[table]:>7,}")
     for path in POST_LOAD_PATHS:
         print(f"  applied          {path.relative_to(REPO_ROOT)}")
     print(f"generated in {generated - started:.1f}s, loaded in {loaded - generated:.1f}s")

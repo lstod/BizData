@@ -101,7 +101,12 @@ async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]
 
     # 1. The portfolio, paged to the end. limit=5 rather than 100 so the paging loop is
     #    genuinely exercised on eighteen engagements rather than being one page.
-    first = await call("list_engagements", as_of_date=period_end, status="active", limit=5)
+    #    include_portfolio on the first page only: the block is identical on every page, and
+    #    asking four times would be four identical answers paid for four times.
+    first = await call(
+        "list_engagements", as_of_date=period_end, status="active", limit=5,
+        include_portfolio=True,
+    )
     engagements = list(first["engagements"])
     cursor, pages = first["next_cursor"], 1
     while cursor and pages <= 50:
@@ -133,6 +138,7 @@ async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]
         "total_count": first["total_count"],
         "pages": pages,
         "engagements": engagements,
+        "portfolio": first.get("portfolio"),
         "time_summary": summary,
         "burn": burn,
         "financials": financials,
@@ -203,30 +209,76 @@ def check_workbook(path: Path, pack: dict[str, Any], anchors: dict[str, Any], ch
     # ---- the three cases a burn threshold cannot reach -------------------------------
     concentrated = anchors["case_8_concentration_engagement"]
     ending = anchors["case_6_mid_period_end_engagement"]
+
+    def burn_of(eid: int) -> str:
+        """Burn for a detail string, from the operands rather than the cell.
+
+        The cell holds a formula since step 7, and a failure message reading
+        `burn =IF(N(J4)>0,K4/J4,"")%` helps nobody.
+        """
+        row = by_id.get(eid, {})
+        ceiling, hours = row.get("ceiling_hours"), row.get("hours_to_date")
+        return f"{round(100 * hours / ceiling, 1)}" if ceiling else "n/a"
+
     row = by_id.get(concentrated, {})
     checks.add(
         "mess case 8: the concentrated engagement was examined",
         concentrated in examined,
         f"engagement {concentrated} at {row.get('person_concentration_pct')}% concentration, "
-        f"burn {row.get('burn_pct')}%, band {row.get('health_band')}",
+        f"burn {burn_of(concentrated)}%, band {row.get('health_band')}",
     )
     checks.add(
         "mess case 6: the engagement that ended inside the period was examined",
         ending in examined,
         f"engagement {ending} ended {by_id.get(ending, {}).get('end_date')}, "
-        f"burn {by_id.get(ending, {}).get('burn_pct')}%",
+        f"burn {burn_of(ending)}%",
     )
 
     # ---- nothing was re-derived ------------------------------------------------------
+    # Since step 7 burn_pct is a live formula, so the cell holds a formula string rather than
+    # the tool's number and cannot be compared to it directly. What is compared instead is the
+    # formula's own operands against the tool's answer: hours_to_date over ceiling_hours, both
+    # copied values on the same row, against burn_pct as SQL computed it.
+    #
+    # That is a stronger check than the one it replaces. The old assertion proved the workbook
+    # had not altered a number in transit. This one proves the live formula and the database
+    # agree about what burn is, which is the claim a reviewer clicking the cell is testing.
     drift = [
         eid for eid in examined
         if by_id[eid].get("weekly_run_rate_4wk") != pack["burn"][str(eid)].get("weekly_run_rate_4wk")
-        or by_id[eid].get("burn_pct") != pack["burn"][str(eid)].get("burn_pct")
     ]
     checks.add(
-        "workbook: run rates and burn are the tools' figures, not re-derived ones",
+        "workbook: run rates are the tools' figures, not re-derived ones",
         not drift,
         "every examined row matches its tool response" if not drift else f"differs on {drift}",
+    )
+
+    # Compared unrounded against the tool's one-decimal figure, with half a decimal place of
+    # tolerance, because that is the largest gap the two can honestly have: SQL rounded to
+    # 1dp, so the true ratio is within 0.05 of what it reported.
+    #
+    # Rounding both sides and demanding equality is the obvious version and it is wrong.
+    # Postgres rounds half away from zero and Python rounds half to even, so a burn landing
+    # exactly on x.x5 comes out 0.1 apart with nothing whatsoever wrong. That fired on seed
+    # 9002 and no other — engagement 30 at 138.25% — which is the fixture set earning its
+    # keep for the fifth time. Excel rounds half up for display, so the cell shows Postgres's
+    # answer anyway; the disagreement was only ever between the harness and the database.
+    disagree = []
+    for eid, row in by_id.items():
+        ceiling, hours = row.get("ceiling_hours"), row.get("hours_to_date")
+        if not ceiling:
+            continue
+        computed = 100 * hours / ceiling
+        reported = next(
+            (e["burn_pct"] for e in pack["engagements"] if e["engagement_id"] == eid), None
+        )
+        if reported is not None and abs(computed - reported) > 0.05 + 1e-9:
+            disagree.append((eid, round(computed, 4), reported))
+    checks.add(
+        "workbook: the live burn formula and the database agree on every row",
+        not disagree,
+        f"{len(by_id)} row(s) within half a decimal place" if not disagree
+        else f"engagement {disagree[0][0]}: formula {disagree[0][1]} vs SQL {disagree[0][2]}",
     )
 
     low = {eid for eid in examined if by_id[eid].get("projection_confidence") == "low"}

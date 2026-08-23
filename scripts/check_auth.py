@@ -107,6 +107,53 @@ def tamper(token: str) -> str:
     return f"{head}.{payload}.{flipped}"
 
 
+SERVER_INFO_META = "io.modelcontextprotocol/serverInfo"
+
+
+def check_deployment_is_current(payload: dict, checks: Checks) -> None:
+    """Is the code answering this endpoint the code in this checkout?
+
+    Step 6's third finding, and the one that cost the most: a Skill went out against a Lambda
+    four steps behind it, two Cowork runs produced wrong deliverables, and every harness in
+    the repository passed throughout — because every harness ran against the working tree.
+    Nothing asserted the deployment. This is that assertion.
+
+    It is here rather than in its own script because this is the only harness that speaks to
+    the public endpoint at all, and a freshness check nobody runs is the same as no check.
+
+    The version comes back on every response's `_meta`, not only on a handshake, because the
+    server is stateless and there is no handshake to put it on.
+    """
+    from server import build_info
+
+    reported = (
+        payload.get("result", {})
+        .get("_meta", {})
+        .get(SERVER_INFO_META, {})
+        .get("version", "")
+    )
+    local = build_info.version()
+
+    checks.add(
+        "the deployed server reports which commit it is running",
+        bool(reported) and "+" in reported,
+        reported or "no serverInfo version in the response",
+    )
+
+    deployed_commit = reported.partition("+")[2]
+    checks.add(
+        "the deployed code is the code in this checkout",
+        deployed_commit == build_info.commit(),
+        f"deployed {deployed_commit or 'unknown'}, local {build_info.commit()}"
+        + ("" if deployed_commit == build_info.commit() else " — run scripts/package_lambda.sh and apply"),
+    )
+    checks.add(
+        "the deployment was not built from a tree with uncommitted changes",
+        not deployed_commit.endswith("-dirty"),
+        reported or local,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--endpoint", default=os.environ.get("BIZDATA_MCP_ENDPOINT", ""))
@@ -206,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     payload = json.loads(body or b"{}")
     tools = payload.get("result", {}).get("tools", [])
     checks.add("a valid token is accepted", status == 200 and len(tools) == 4, f"HTTP {status}, {len(tools)} tools")
+
+    check_deployment_is_current(payload, checks)
 
     status, _, body = post_mcp(
         args.endpoint,

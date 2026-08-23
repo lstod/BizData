@@ -59,6 +59,8 @@ LOG_FIELDS = ("run_id", "tool", "arguments", "total_count", "returned_count", "l
 # call happens to hit that branch first.
 EXPECTED_PARAMS = {
     "list_engagements": {"as_of_date", "status", "client_id", "cursor", "limit"},
+    "list_engagements_portfolio": {"as_of_date"},
+    "list_engagements_portfolio_clients": {"as_of_date"},
     "get_engagement_burn": {"engagement_id", "as_of_date"},
     "get_financials": {"engagement_id", "period"},
     "get_time_summary": {"engagement_ids", "period_start", "period_end", "max_rows"},
@@ -242,7 +244,9 @@ def check_published_schemas(tools: Any, checks: Checks) -> dict[str, dict[str, A
     (*args, **kwargs), which no client could call and which nothing else here would catch.
     """
     expected_inputs = {
-        "list_engagements": {"as_of_date", "status", "client_id", "cursor", "limit", "run_id"},
+        "list_engagements": {
+            "as_of_date", "status", "client_id", "cursor", "limit", "include_portfolio", "run_id",
+        },
         "get_engagement_burn": {"engagement_id", "as_of_date", "run_id"},
         "get_time_summary": {"period_start", "period_end", "group_by", "engagement_ids", "run_id"},
         "get_financials": {"engagement_id", "period", "run_id"},
@@ -356,6 +360,103 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks) -> None:
             "list_engagements: key person concentration comes back on the row too",
             len(with_conc) == len(triage) and all(e.get("people_count") for e in with_conc),
             f"{len(with_conc)} of {len(triage)} rows, people_count alongside",
+        )
+
+        # ---- step 7: the portfolio block ---------------------------------------------
+        # The deck's summary and margin-by-client slides read these figures and nothing
+        # else. They exist because the alternative was the deck builder adding the rows up,
+        # which would put a second source of figures into the artifact a partner reads out
+        # loud. So what is asserted here is mostly that they are the sums they claim to be.
+        checks.add(
+            "list_engagements: no portfolio block unless it was asked for",
+            first.get("portfolio") is None,
+            "absent by default",
+        )
+
+        withp = await h.call(
+            "list_engagements", as_of_date=period_end, status="active", limit=5,
+            include_portfolio=True,
+        )
+        pf = withp.get("portfolio") or {}
+        clients = pf.get("clients") or []
+
+        checks.add(
+            "portfolio: the block arrives when include_portfolio is set",
+            bool(pf) and bool(clients),
+            f"{len(clients)} client(s), {pf.get('engagements_active')} active engagement(s)",
+        )
+        checks.add(
+            "portfolio: it counts the whole active book, not the page it rode in on",
+            pf.get("engagements_active") == total,
+            f"{pf.get('engagements_active')} active vs total_count {total}, page held {withp['returned_count']}",
+        )
+        checks.add(
+            "portfolio: clients_active matches the distinct clients in the rows",
+            pf.get("clients_active") == len({e["client_name"] for e in triage.values()}) == len(clients),
+            f"{pf.get('clients_active')} counted, {len(clients)} client row(s)",
+        )
+
+        # Page invariance. The block is documented as identical on every page, and a caller
+        # that pages four times and gets four different portfolio totals has no way to know
+        # which one to print.
+        last_page = await h.call(
+            "list_engagements", as_of_date=period_end, status="active", limit=5,
+            cursor=str(sorted(active)[-2]), include_portfolio=True,
+        )
+        checks.add(
+            "portfolio: identical on the last page and the first",
+            last_page.get("portfolio") == pf,
+            "byte-identical across pages" if last_page.get("portfolio") == pf else "differs between pages",
+        )
+
+        # The client rows are a partition of the portfolio, so they have to add up. This is
+        # the assertion that would catch a client dropped by a join, which is the failure
+        # that would silently shrink the margin-by-client chart.
+        for field, per_client in (
+            ("hours_to_date_total", "hours_to_date"),
+            ("cost_to_date_total", "cost_to_date"),
+            ("revenue_to_date_total", "revenue_to_date"),
+            ("ceiling_hours_total", "ceiling_hours"),
+        ):
+            summed = round(sum(c[per_client] for c in clients), 2)
+            whole = round(pf[field], 2)
+            checks.add(
+                f"portfolio: the client rows sum to {field}",
+                abs(summed - whole) < 0.05,
+                f"{summed} summed vs {whole} reported",
+            )
+        checks.add(
+            "portfolio: the client rows account for every active engagement",
+            sum(c["engagements_active"] for c in clients) == total,
+            f"{sum(c['engagements_active'] for c in clients)} of {total}",
+        )
+
+        # Blended margin is a ratio of sums. Asserted against the block's own operands
+        # rather than recomputed from somewhere else, so this checks the view's arithmetic
+        # and not a second implementation of it.
+        blended = round(
+            100 * (pf["revenue_to_date_total"] - pf["cost_to_date_total"]) / pf["revenue_to_date_total"], 1
+        )
+        checks.add(
+            "portfolio: blended margin is revenue less cost over revenue, summed then divided",
+            abs(blended - pf["blended_margin_pct"]) <= 0.1,
+            f"{pf['blended_margin_pct']}% reported, {blended}% from the operands beside it",
+        )
+        checks.add(
+            "portfolio: burn is total hours over total ceiling hours",
+            abs(round(100 * pf["hours_to_date_total"] / pf["ceiling_hours_total"], 1)
+                - pf["portfolio_burn_pct"]) <= 0.1,
+            f"{pf['portfolio_burn_pct']}%",
+        )
+
+        # Movement against the prior month. The window is twelve periods, so August always
+        # has one to compare against; a null here means the lag lost its ordering.
+        checks.add(
+            "portfolio: movement against the prior month is populated, not null",
+            pf.get("blended_margin_delta_pct") is not None
+            and pf.get("mean_health_score_delta") is not None,
+            f"margin {pf.get('blended_margin_delta_pct')}pp, "
+            f"health {pf.get('mean_health_score_delta')}",
         )
 
         # ---- mess case 3: silent engagement, low confidence, unasked -----------------

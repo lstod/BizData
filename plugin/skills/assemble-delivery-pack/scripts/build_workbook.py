@@ -13,10 +13,17 @@ was calculated by a model, and the claim has to survive the last step as well as
 ones. A script that quietly totals a column is a second place figures come from, and the
 first time it disagrees with the database nobody will know which one is wrong.
 
-Two consequences worth knowing before editing:
+Three consequences worth knowing before editing:
 
-  * Ratios arrive already scaled. burn_pct, margin_pct and person_concentration_pct come
-    back from the tools on the 0..100 scale, converted once in SQL. Do not rescale them.
+  * Ratios arrive already scaled. person_concentration_pct, realisation_pct, late_entry_pct
+    and the rest come back from the tools on the 0..100 scale, converted once in SQL. Do not
+    rescale them in Python. They are displayed with a 0.0"%" format, which appends the sign
+    without multiplying.
+  * Three columns are the exception, and they are exceptions in the other direction. Since
+    step 7, burn_pct, projected_overrun_pct and margin_pct are Excel formulas rather than
+    copied values, so the cell holds a 0..1 ratio and a 0.0% format scales it for display.
+    Excel computes them, not this script, and that distinction is the whole point: a
+    reviewer clicking the cell sees where the number came from. See HOUSE FORMAT below.
   * The gap week is not filtered out of Time Detail. Those rows are a record of what was
     filed, and the week is marked rather than removed — removing it would hide the thing the
     Data Quality tab is there to report. What the week is excluded from is the run rates,
@@ -25,10 +32,17 @@ Two consequences worth knowing before editing:
 Runs in Cowork's code execution sandbox, so the dependencies are openpyxl and the standard
 library and nothing else.
 
-Step 7 adds the house format on top of this: live per-row formulas for burn, projected
-overrun and margin, conditional formatting, number formats, and the deck. The tab names,
-their order and the column layout are settled here so that step 7 is formatting rather than
-restructuring.
+HOUSE FORMAT (step 7). The three live formulas, the number formats and the conditional
+formatting on burn are defined in plugin/skills/house-format/SKILL.md and implemented in
+FORMULAS and FORMATS below. Adding a formula here means adding it there.
+
+The margin formula deviates from the spec and the deviation is deliberate.
+spec-a-delivery-margin.md prescribes a single `=(Billable_Value - Cost) / Billable_Value`,
+but engagement_burn_v1 branches on fee type — fixed fee takes the fee as revenue — and mess
+case 4 is a fixed-fee engagement at negative margin beside a healthy burn. Writing the
+spec's version would put a margin in the workbook that disagrees with the one behind the
+health score, and would make case 4 stop being a contradiction. The Excel formula carries
+the branch.
 """
 
 from __future__ import annotations
@@ -40,13 +54,18 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.formatting.rule import CellIsRule
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 TABS = ("Summary", "Engagements", "Time Detail", "Exceptions", "Data Quality")
 
 COVERAGE_FLOOR = 60
+
+# The house format's two burn thresholds, on the 0..1 scale the live formula produces.
+BURN_AMBER = 0.70
+BURN_RED = 0.90
 
 # Columns come straight off the tool responses and keep the tools' own field names, so any
 # cell in the book can be traced to the call that produced it without a mapping table.
@@ -96,6 +115,97 @@ QUALITY_METRICS = (
 
 HEADER = Font(bold=True)
 SECTION = Font(bold=True, size=12)
+
+# ---------------------------------------------------------------- the house format
+
+# Live formulas on the Engagements tab, step 7. Each entry is a function of a row number and
+# a name-to-letter resolver, returning the formula for that cell.
+#
+# Every one of them is guarded, and the guard is not defensive coding. Unexamined
+# engagements carry blank detail cells on purpose — a blank is honest about not having been
+# looked at, a zero is not — and an unguarded formula over a blank turns that considered
+# blank into 0.0%, which reads as a measured figure. The guard keeps the blank a blank.
+FORMULAS = {
+    # Burn works on every row: both operands are triage columns, present whether or not the
+    # engagement was examined. That matters for the conditional formatting, which then
+    # covers the whole column rather than the examined subset.
+    "burn_pct": lambda r, at: (
+        f'=IF(N({at("ceiling_hours")}{r})>0,'
+        f'{at("hours_to_date")}{r}/{at("ceiling_hours")}{r},"")'
+    ),
+    "projected_overrun_pct": lambda r, at: (
+        f'=IF(AND(N({at("ceiling_hours")}{r})>0,{at("projected_total_hours")}{r}<>""),'
+        f'MAX(0,{at("projected_total_hours")}{r}-{at("ceiling_hours")}{r})'
+        f'/{at("ceiling_hours")}{r},"")'
+    ),
+    # The fee-type branch, inherited from engagement_burn_v1.margin_ratio rather than
+    # re-decided. See the module docstring for why the spec's single formula is not used.
+    "margin_pct": lambda r, at: (
+        f'=IF({at("cost_to_date")}{r}="","",'
+        f'IF({at("fee_type")}{r}="fixed",'
+        f'IF(N({at("ceiling_amount")}{r})>0,'
+        f'({at("ceiling_amount")}{r}-{at("cost_to_date")}{r})/{at("ceiling_amount")}{r},""),'
+        f'IF(N({at("billable_value_to_date")}{r})>0,'
+        f'({at("billable_value_to_date")}{r}-{at("cost_to_date")}{r})'
+        f'/{at("billable_value_to_date")}{r},"")))'
+    ),
+}
+
+# Percentages to one decimal, currency to none, dates ISO.
+#
+# Two percent formats, because there are two kinds of column here. The three formula columns
+# hold a 0..1 ratio, so 0.0% scales them for display in the ordinary Excel way. Every other
+# _pct column holds a value the tools already scaled to 0..100, so it gets 0.0"%" — a
+# literal percent sign appended, no multiplication. Both read as "58.3%" on the tab, and
+# neither one rescales anything in Python.
+RATIO_PCT = "0.0%"
+SCALED_PCT = '0.0"%"'
+CURRENCY = "#,##0"
+HOURS = "#,##0.0"
+ISO_DATE = "yyyy-mm-dd"
+ONE_DP = "0.0"
+
+FORMATS = {
+    **{name: RATIO_PCT for name in FORMULAS},
+    **{
+        name: SCALED_PCT
+        for name in (
+            "person_concentration_pct", "realisation_pct", "late_entry_pct",
+            "run_rate_vs_baseline_pct", "payment_behaviour_change_pct",
+        )
+    },
+    **{
+        name: CURRENCY
+        for name in (
+            "ceiling_amount", "invoiced", "paid", "wip_unbilled",
+            "cost_to_date", "billable_value_to_date",
+        )
+    },
+    **{
+        name: HOURS
+        for name in (
+            "ceiling_hours", "hours_to_date", "hours_remaining",
+            "weekly_run_rate_4wk", "projected_total_hours",
+        )
+    },
+    **{name: ISO_DATE for name in ("start_date", "end_date")},
+    **{name: ONE_DP for name in ("health_score", "score_delta_vs_prior_period", "dso_days",
+                                 "dso_baseline_days", "days_since_last_entry")},
+}
+
+TIME_DETAIL_FORMATS = {
+    "week_start": ISO_DATE,
+    "hours": HOURS,
+    "billable_hours": HOURS,
+    "cost": CURRENCY,
+    "billable_value": CURRENCY,
+    "pct_active_reporting": SCALED_PCT,
+}
+
+AMBER_FILL = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+RED_FILL = PatternFill(start_color="F8CBAD", end_color="F8CBAD", fill_type="solid")
+AMBER_FONT = Font(color="7F6000")
+RED_FONT = Font(color="9C0006")
 
 
 class PackError(Exception):
@@ -190,9 +300,17 @@ def gap_weeks(pack: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def build_engagements(ws: Worksheet, pack: dict[str, Any]) -> None:
-    """One row per engagement, detail attached where the engagement was examined."""
+    """One row per engagement, detail attached where the engagement was examined.
+
+    Three of the columns are Excel formulas rather than copied values — see FORMULAS. They
+    are written last, over the top of the copied value, so that the column order stays the
+    tools' own and the formula lands in the cell its field name claims.
+    """
     burn = {int(k): v for k, v in pack.get("burn", {}).items()}
     financials = {int(k): v for k, v in pack.get("financials", {}).items()}
+
+    def at(name: str) -> str:
+        return column_letter(ENGAGEMENT_COLUMNS, name)
 
     write_header(ws, ENGAGEMENT_COLUMNS)
     for row, engagement in enumerate(pack["engagements"], start=2):
@@ -204,6 +322,28 @@ def build_engagements(ws: Worksheet, pack: dict[str, Any]) -> None:
             *pick(burn.get(eid), BURN_COLUMNS),
             *pick(financials.get(eid), FINANCIAL_COLUMNS),
         ])
+
+        for name, formula in FORMULAS.items():
+            ws[f"{at(name)}{row}"] = formula(row, at)
+
+    last = len(pack["engagements"]) + 1
+    for name, fmt in FORMATS.items():
+        letter = at(name)
+        for row in range(2, last + 1):
+            ws[f"{letter}{row}"].number_format = fmt
+
+    # Amber above 0.70, red above 0.90, in that order — openpyxl writes rules in the order
+    # added and Excel stops at the first match, so red has to be tested first or every red
+    # cell reads amber.
+    burn_range = f"{at('burn_pct')}2:{at('burn_pct')}{last}"
+    ws.conditional_formatting.add(
+        burn_range,
+        CellIsRule(operator="greaterThan", formula=[str(BURN_RED)], fill=RED_FILL, font=RED_FONT),
+    )
+    ws.conditional_formatting.add(
+        burn_range,
+        CellIsRule(operator="greaterThan", formula=[str(BURN_AMBER)], fill=AMBER_FILL, font=AMBER_FONT),
+    )
 
     ws.freeze_panes = "B2"
     widths(ws, ENGAGEMENT_COLUMNS, wide={"confidence_reason", "name"})
@@ -241,8 +381,12 @@ def build_summary(ws: Worksheet, pack: dict[str, Any]) -> None:
         ("Ceiling hours", f"=SUM({over('ceiling_hours')})"),
         ("Hours to date", f"=SUM({over('hours_to_date')})"),
         ("Ceiling amount", f"=SUM({over('ceiling_amount')})"),
-        ("Over their ceiling", f'=COUNTIF({over("burn_pct")},">100")'),
-        ("Above 70% burn", f'=COUNTIF({over("burn_pct")},">70")'),
+        # Against 1 and 0.7 rather than 100 and 70: since step 7 the burn column is a live
+        # formula holding a 0..1 ratio, displayed as a percentage by its number format. The
+        # concentration count below it is still a tool value on the 0..100 scale, so the two
+        # thresholds on this tab are deliberately written on different scales.
+        ("Over their ceiling", f'=COUNTIF({over("burn_pct")},">1")'),
+        ("Above 70% burn", f'=COUNTIF({over("burn_pct")},">{BURN_AMBER}")'),
         ("Not in the green band", f'=COUNTIF({over("health_band")},"<>green")'),
         ("Above 70% person concentration", f'=COUNTIF({over("person_concentration_pct")},">70")'),
         ("Projections reported low confidence", f'=COUNTIF({over("projection_confidence")},"low")'),
@@ -254,21 +398,76 @@ def build_summary(ws: Worksheet, pack: dict[str, Any]) -> None:
         ("Lowest weekly reporting coverage", completeness.get("lowest_pct_active_reporting")),
     ]
 
+    # Step 7. The portfolio block from list_engagements, copied straight across. These are
+    # the figures the deck's summary slide reads, and they are here because the deck may not
+    # contain a number the workbook does not — a claim that has to be checkable against two
+    # files rather than asserted in prose.
+    #
+    # Blended margin is the reason this block cannot be an Excel formula over Engagements.
+    # It is a ratio of sums whose numerator switches on fee type, so the sum it needs is of
+    # a quantity that is not a column on the tab. It comes from SQL, like every other ratio
+    # in the pack.
+    #
+    # The totals that are on both — hours, ceiling hours — are deliberately left duplicated.
+    # The Excel SUM above and the tool figure here are computed independently and have to
+    # agree, and scripts/check_format.py asserts that they do.
+    book = pack.get("portfolio") or {}
+    measured: list[tuple[str, Any]] = []
+    if book:
+        measured = [
+            ("Active engagements", book.get("engagements_active")),
+            ("Clients", book.get("clients_active")),
+            ("In the green band", book.get("engagements_green")),
+            ("Ceiling hours", book.get("ceiling_hours_total")),
+            ("Hours to date", book.get("hours_to_date_total")),
+            ("Portfolio burn", book.get("portfolio_burn_pct")),
+            ("Revenue to date", book.get("revenue_to_date_total")),
+            ("Cost to date", book.get("cost_to_date_total")),
+            ("Blended margin", book.get("blended_margin_pct")),
+            ("Mean health score", book.get("mean_health_score")),
+            ("Blended margin, movement vs prior month", book.get("blended_margin_delta_pct")),
+            ("Mean health score, movement vs prior month", book.get("mean_health_score_delta")),
+            ("Hours to date, movement vs prior month", book.get("hours_to_date_delta")),
+        ]
+
+    # Which of those labels take which format. Keyed by label because this tab is label and
+    # value pairs rather than columns.
+    summary_formats = {
+        "Ceiling hours": HOURS,
+        "Hours to date": HOURS,
+        "Hours to date, movement vs prior month": HOURS,
+        "Ceiling amount": CURRENCY,
+        "Revenue to date": CURRENCY,
+        "Cost to date": CURRENCY,
+        "Portfolio burn": SCALED_PCT,
+        "Blended margin": SCALED_PCT,
+        "Blended margin, movement vs prior month": SCALED_PCT,
+        "Mean health score": ONE_DP,
+        "Mean health score, movement vs prior month": ONE_DP,
+        "Lowest weekly reporting coverage": SCALED_PCT,
+    }
+
     row = 1
-    for title, block in (
+    blocks = [
         ("Delivery and margin review", facts),
         ("Portfolio", portfolio),
-        ("Reporting coverage", reporting),
-    ):
+    ]
+    if measured:
+        blocks.append(("Portfolio, as the tools measured it", measured))
+    blocks.append(("Reporting coverage", reporting))
+
+    for title, block in blocks:
         ws.cell(row=row, column=1, value=title).font = SECTION
         row += 1
         for label, value in block:
             ws.cell(row=row, column=1, value=label)
-            ws.cell(row=row, column=2, value=value)
+            cell = ws.cell(row=row, column=2, value=value)
+            if fmt := summary_formats.get(label):
+                cell.number_format = fmt
             row += 1
         row += 1
 
-    ws.column_dimensions["A"].width = 38
+    ws.column_dimensions["A"].width = 42
     ws.column_dimensions["B"].width = 30
 
 
@@ -285,13 +484,19 @@ def build_time_detail(ws: Worksheet, pack: dict[str, Any]) -> None:
     }
 
     write_header(ws, TIME_DETAIL_COLUMNS)
-    for row, entry in enumerate(pack["time_summary"].get("rows", []), start=2):
+    rows = pack["time_summary"].get("rows", [])
+    for row, entry in enumerate(rows, start=2):
         week = weeks.get(str(entry.get("week_start")), {})
         write_row(ws, row, [
             *pick(entry, TIME_DETAIL_COLUMNS[:8]),
             week.get("pct_active_reporting"),
             week.get("firm_wide_gap"),
         ])
+
+    for name, fmt in TIME_DETAIL_FORMATS.items():
+        letter = column_letter(TIME_DETAIL_COLUMNS, name)
+        for row in range(2, len(rows) + 2):
+            ws[f"{letter}{row}"].number_format = fmt
 
     ws.freeze_panes = "A2"
     widths(ws, TIME_DETAIL_COLUMNS, wide={"engagement_name"})
@@ -332,7 +537,9 @@ def build_data_quality(ws: Worksheet, pack: dict[str, Any]) -> None:
     section("Record quality — entries in the period")
     for field, label in QUALITY_METRICS:
         ws.cell(row=row, column=1, value=label)
-        ws.cell(row=row, column=2, value=quality.get(field))
+        cell = ws.cell(row=row, column=2, value=quality.get(field))
+        if field.endswith("_pct"):
+            cell.number_format = SCALED_PCT
         ws.cell(row=row, column=3, value=field)
         row += 1
     row += 1
@@ -342,10 +549,13 @@ def build_data_quality(ws: Worksheet, pack: dict[str, Any]) -> None:
         "week_start", "week_end", "engagements_active", "engagements_reporting",
         "pct_active_reporting", "firm_wide_gap",
     )
+    coverage_formats = {"week_start": ISO_DATE, "week_end": ISO_DATE, "pct_active_reporting": SCALED_PCT}
     write_header(ws, coverage_columns, row=row)
     row += 1
     for week in completeness.get("weeks", []):
         write_row(ws, row, pick(week, coverage_columns))
+        for name, fmt in coverage_formats.items():
+            ws.cell(row=row, column=coverage_columns.index(name) + 1).number_format = fmt
         row += 1
     row += 1
 

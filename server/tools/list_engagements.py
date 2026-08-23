@@ -63,6 +63,71 @@ class Engagement(BaseModel):
     )
 
 
+class ClientSummary(BaseModel):
+    """One client's share of the book, for the deck's margin-by-client slide."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: int
+    client_name: str
+    engagements_active: int
+    ceiling_hours: float
+    hours_to_date: float
+    ceiling_amount: float
+    revenue_to_date: float = Field(
+        description="Fee for fixed-price engagements, billable value at rate card for time and materials."
+    )
+    cost_to_date: float
+    burn_pct: float | None = None
+    margin_pct: float | None = Field(
+        default=None,
+        description="Blended across this client's active engagements: a ratio of sums, not a mean of ratios.",
+    )
+
+
+class PortfolioSummary(BaseModel):
+    """The whole active book as one row, plus one row per client.
+
+    Deliberately not narrowed to the filters applied to the engagement rows it travels with,
+    the same way get_time_summary's data_completeness is measured firm-wide rather than over
+    the engagements asked about. A portfolio summary computed over a subset is a different
+    quantity with the same name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    period_start: dt.date
+    period_end: dt.date
+
+    engagements_active: int
+    clients_active: int
+    engagements_green: int | None = None
+
+    ceiling_hours_total: float
+    hours_to_date_total: float
+    ceiling_amount_total: float
+    revenue_to_date_total: float
+    cost_to_date_total: float
+
+    portfolio_burn_pct: float | None = Field(
+        default=None, description="Hours to date against ceiling hours across the whole active book."
+    )
+    blended_margin_pct: float | None = Field(
+        default=None,
+        description="Revenue less cost over revenue, summed across the book before dividing.",
+    )
+    mean_health_score: float | None = None
+
+    blended_margin_delta_pct: float | None = Field(
+        default=None, description="Movement against the portfolio's own prior month. Null in the first period."
+    )
+    mean_health_score_delta: float | None = None
+    hours_to_date_delta: float | None = None
+    engagements_active_delta: int | None = None
+
+    clients: list[ClientSummary]
+
+
 class ListEngagementsResult(Response):
     engagements: list[Engagement]
     next_cursor: str | None = Field(
@@ -71,6 +136,36 @@ class ListEngagementsResult(Response):
     )
     as_of_date: dt.date
     period_start: dt.date
+    portfolio: PortfolioSummary | None = Field(
+        default=None, description="Present only when include_portfolio was set. Identical on every page."
+    )
+
+
+def _portfolio(as_of: dt.date) -> tuple[PortfolioSummary | None, str | None]:
+    """The portfolio block, in two queries at two grains.
+
+    Two round trips rather than one, because the alternative is a grouping set returning both
+    grains in one result with a nullable client column, and every consumer would then have to
+    branch on which shape a row is. get_time_summary already pays for three queries per call
+    for the same reason.
+    """
+    head = db.query("list_engagements_portfolio", {"as_of_date": as_of})
+    if not head:
+        return None, None
+
+    row = head[0]
+    clients = db.query("list_engagements_portfolio_clients", {"as_of_date": as_of})
+
+    return (
+        PortfolioSummary(
+            **{k: v for k, v in row.items() if k in PortfolioSummary.model_fields},
+            clients=[
+                ClientSummary(**{k: v for k, v in c.items() if k in ClientSummary.model_fields})
+                for c in clients
+            ],
+        ),
+        row.get("scoring_model_version"),
+    )
 
 
 @logged
@@ -80,6 +175,7 @@ def list_engagements(
     client_id: int | None = None,
     cursor: str | None = None,
     limit: int = 25,
+    include_portfolio: bool = False,
     run_id: str | None = None,
 ) -> ListEngagementsResult:
     """List engagements live at a date with their burn and health, for triage in one call.
@@ -95,12 +191,20 @@ def list_engagements(
     ceiling and in the green band while one person is 85% of its hours, or while its
     contract ended part way through the period, and neither risk is visible in burn_pct.
 
+    Set include_portfolio on the first page to get portfolio totals and margin by client
+    alongside the rows: blended margin, total hours, and movement against the prior month,
+    all computed in SQL. Those figures are for the review's summary and its margin-by-client
+    chart, and they are the only source for them — do not add up the rows to get them.
+
     Args:
         as_of_date: ISO date. The month containing it is the period measured.
         status: Filter to active, completed or on_hold. All statuses when omitted.
         client_id: Filter to one client. All clients when omitted.
         cursor: next_cursor from a previous page. Start of the list when omitted.
         limit: Rows per page, 1 to 100.
+        include_portfolio: Attach the portfolio block. Measured across the whole active
+            book regardless of the filters above, and identical on every page, so one page
+            needs it.
         run_id: Groups this call with the rest of one run in the tool-call log.
     """
     as_of = as_date(as_of_date, "as_of_date")
@@ -134,6 +238,9 @@ def list_engagements(
     # terminates on a value rather than on a comparison the caller has to get right.
     more = remaining > len(rows)
 
+    portfolio, portfolio_version = _portfolio(as_of) if include_portfolio else (None, None)
+    version = version or portfolio_version
+
     return ListEngagementsResult(
         run_id=run_id or new_run_id(),
         total_count=total,
@@ -143,4 +250,5 @@ def list_engagements(
         next_cursor=str(rows[-1]["engagement_id"]) if more else None,
         as_of_date=as_of,
         period_start=as_of.replace(day=1),
+        portfolio=portfolio,
     )

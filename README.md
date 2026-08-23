@@ -9,9 +9,9 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 6 and 14 of 14 are done. The
+assemble the pack. **Build in progress** — steps 0 through 7 and 14 of 14 are done. The
 server is deployed on AWS behind Cognito and answering tool calls from a Cowork connector;
-the first Skill produces the engagement book. The architecture write-up, the security
+the Skills produce the engagement book and the partner deck, to a format that does not vary. The architecture write-up, the security
 posture and the demo land at step 11.
 
 ## All of the data here is synthetic
@@ -147,7 +147,30 @@ That follows the Skill's order of operations against the in-memory server, runs 
 builder with the command line the Skill prescribes, then re-reads the workbook off disk and
 asserts on it — that paging reached `total_count`, that the examine set reaches the mess cases a
 burn threshold cannot, that the run rates in the book are the tools' own figures, and that no
-cell anywhere calls the low-coverage week a slowdown. 31 assertions per seed.
+cell anywhere calls the low-coverage week a slowdown. 32 assertions per seed.
+
+## The format is the deliverable
+
+`plugin/skills/house-format/` is the second Skill, and it exists because a pack that looks
+different every month is a pack nobody learns to read. It fixes the five tabs, the eight slides,
+the number formats, and the voice — declarative, no adjectives on numbers.
+
+Three columns on the `Engagements` tab are Excel formulas rather than values, so clicking a burn
+cell shows `=IF(N(J4)>0,K4/J4,"")` and not `84.2%`. Margin branches on fee type, because the SQL
+does and a workbook that disagrees with the health score is worse than one with no margin in it.
+
+The deck is eight slides and a native chart, built from the same `pack.json` as the workbook, and
+it may not contain a number the workbook does not.
+
+```bash
+.venv/bin/python scripts/check_format.py           # every reserved seed
+.venv/bin/python scripts/check_format.py --seed 42 -v --keep /tmp/format
+```
+
+44 assertions per seed: that every row of each formula column holds a formula string and reads the
+columns it claims to, that the conditional formatting tests red before amber, that the slides are
+in order with data quality always last — including on a synthesised period with nothing to
+report — and that every number on every slide traces back to the workbook or the pack behind it.
 
 ## Engagement health is a number, not a threshold in a prompt
 
@@ -241,6 +264,10 @@ plugin/
     assemble-delivery-pack/
       SKILL.md            order of operations, the coverage rule, stop conditions
       scripts/            build_workbook.py: five tabs, no arithmetic
+    house-format/
+      SKILL.md            the tabs, the slides, the formulas, the voice
+      scripts/            build_deck.py: eight slides, no arithmetic
+      assets/             self-check.md, run against the files before shipping
 infra/
   bootstrap/              Terraform state bucket and the budget alarm, local state
   main/                   everything else, S3 backend with native locking
@@ -250,7 +277,9 @@ scripts/
   writers.py              local Postgres now, RDS Data API at step 5
   check_tools.py          the tools' Done-when conditions, as assertions
   check_pack.py           the pack's, asserted against the workbook on disk
+  check_format.py         the house format's, against the workbook and the deck
   sweep.sh                the SQL checks across every reserved seed
+  package_skill.sh        zip a Skill directory for upload, without the macOS cruft
 docker-compose.yml        local Postgres for steps 1 to 4
 ```
 

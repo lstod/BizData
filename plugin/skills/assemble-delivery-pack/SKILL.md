@@ -25,12 +25,18 @@ rather than the obvious two.
 **1. List the portfolio.**
 
 ```
-list_engagements(status="active", as_of_date=<period_end>, limit=100)
+list_engagements(status="active", as_of_date=<period_end>, limit=100, include_portfolio=true)
 ```
 
 Page with `next_cursor` until the returned rows sum to `total_count`. Never work from a partial
 list. The omitted engagement is the one that was in trouble, and a short list produces a pack that
 looks clean rather than one that looks short.
+
+`include_portfolio` on the **first call only**. It returns the whole active book's totals —
+blended margin, total hours, movement against the prior month — and margin per client, all
+computed in SQL. The deck's summary and margin-by-client slides read those figures and there is
+no other source for them: the block is identical on every page, so asking again while paging
+buys nothing.
 
 **2. Summarise the time, portfolio-wide, before analysing anything.**
 
@@ -81,7 +87,9 @@ detail you paid for. Do not call `get_engagement_burn` for all eighteen engageme
 what is NEEDS REVIEW, and what goes in the `Exceptions` tab. This skill decides what to look at;
 that one decides what to say about it.
 
-**7. Build the workbook** with the bundled script. See *Producing the workbook*.
+**7. Build the workbook, then the deck**, both with their bundled scripts and in that order.
+See *Producing the pack*. The format of both is `house-format`'s: the five tabs, the live
+formulas, the eight slides and the voice all live there, and this skill does not restate them.
 
 ## The coverage rule
 
@@ -139,16 +147,25 @@ Stop and report rather than producing a pack when:
 A stopped run says which condition tripped and what was seen. It does not produce a partial
 workbook.
 
-## Producing the workbook
+## Producing the pack
 
-Collect the raw tool responses into one JSON file, unmodified, then run the bundled script:
+Collect the raw tool responses into one JSON file, unmodified, then run the two bundled scripts
+in this order:
 
 ```bash
 python scripts/build_workbook.py pack.json --out engagement-book-2026-08.xlsx
+python scripts/build_deck.py     pack.json --out delivery-review-2026-08.pptx
 ```
 
-The script does the layout. It does not compute anything, which is what keeps the "every figure
-came from a tool" rule true through to the file on disk.
+The workbook first, always. The deck may not contain a number that is not in the book, and
+building it second is what makes that checkable rather than merely intended.
+
+The scripts do the layout. Neither computes anything, which is what keeps the "every figure came
+from a tool" rule true through to the files on disk.
+
+If either script is missing from the environment, **stop and say so**. Do not write a
+replacement: a hand-rolled builder produces a different layout every month, and it has already
+silently dropped a column once.
 
 `pack.json` has this shape. Keys are exactly the field names the tools returned:
 
@@ -157,6 +174,7 @@ came from a tool" rule true through to the file on disk.
   "period": "2026-08",
   "run_id": "delivery-review-2026-08",
   "engagements": [ "<every list_engagements row, all pages, in order>" ],
+  "portfolio": "<the portfolio block from the first list_engagements call, whole>",
   "time_summary": "<the whole get_time_summary response, including both blocks>",
   "burn": { "12": "<the get_engagement_burn response for engagement 12>" },
   "financials": { "12": "<the get_financials response for engagement 12>" },
@@ -173,9 +191,11 @@ came from a tool" rule true through to the file on disk.
 }
 ```
 
-`burn` and `financials` hold only the engagements chosen at step 4. `exceptions` comes from
-`scope-escalation`; an empty list is valid and produces a tab saying no engagement was flagged,
-which is itself a finding.
+`burn` and `financials` hold only the engagements chosen at step 4. `portfolio` is copied whole
+from the first `list_engagements` response and is required — the deck refuses to build without
+it rather than adding the rows up itself. `exceptions` comes from `scope-escalation`; an empty
+list is valid and produces a tab saying no engagement was flagged, which is itself a finding.
 
-The script writes five tabs in order — `Summary`, `Engagements`, `Time Detail`, `Exceptions`,
-`Data Quality` — and reports the gap week on the last of them. Tell the user where the file landed.
+The scripts write five tabs in order — `Summary`, `Engagements`, `Time Detail`, `Exceptions`,
+`Data Quality` — and the deck's slides in `house-format`'s order, reporting the gap week on the
+last tab and the last slide. Tell the user where both files landed.

@@ -25,3 +25,11 @@ boto3==1.42.51
 # the standard library and nothing else. The pin here is for scripts/check_pack.py, which
 # runs the same script locally and asserts on what it produced.
 openpyxl==3.1.5
+
+# The deck writer, step 7, and the same arrangement as openpyxl above: it is the only
+# dependency of plugin/skills/house-format/scripts/build_deck.py, which runs in the sandbox
+# rather than here. Whether the sandbox has it is not knowable from this repo, so the script
+# checks for it and says so in one line rather than failing with a bare import error — see
+# docs/notes/step-7-packaging.md for why that specific failure mode is the one to design
+# against.
+python-pptx==1.0.2

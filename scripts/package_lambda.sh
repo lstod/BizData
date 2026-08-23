@@ -66,6 +66,28 @@ cp -R "${REPO_ROOT}/db/sql" "${STAGE_DIR}/db/sql"
 cp "${REPO_ROOT}/run.sh" "${STAGE_DIR}/run.sh"
 chmod 755 "${STAGE_DIR}/run.sh"
 
+# The commit this package was built from, baked in so the deployed server can say what code
+# it is running. server/build_info.py reads it and puts it on MCPServer(version=...), which
+# comes back in serverInfo on every response; scripts/check_auth.py compares it against the
+# working tree.
+#
+# This is step 6's third finding closed. A Skill went out against a Lambda four steps behind
+# it, every harness passed because every harness ran against the checkout, and two Cowork
+# runs produced wrong deliverables before anybody looked at the function's modified date.
+#
+# It costs the zip some of its determinism: the same source tree at two different commits now
+# produces two different archives, so a docs-only commit forces a redeploy. Accepted, because
+# a stamp that only moves when shipped files move cannot detect the thing it is for. The zip
+# is still byte-identical for a given commit, which is what makes a rebuild-and-apply a no-op.
+COMMIT="$(git -C "${REPO_ROOT}" describe --always --dirty --abbrev=12 2>/dev/null || echo unknown)"
+printf '{"commit": "%s"}\n' "${COMMIT}" > "${STAGE_DIR}/server/_build_stamp.json"
+echo "stamped ${COMMIT}"
+case "${COMMIT}" in
+    *-dirty)
+        echo "  warning: built from a tree with uncommitted changes" >&2
+        ;;
+esac
+
 # Bytecode only. It is machine- and timestamp-specific, unnecessary at runtime, and would
 # defeat the deterministic zip below.
 #
