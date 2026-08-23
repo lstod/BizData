@@ -1,0 +1,77 @@
+step 7 — the deployment gap, closed and then checked for
+
+Captured 2026-08-23. Commit 0ee0243f3a5f.
+
+Step 6's third finding was a Skill shipped against a Lambda that did not have the column it
+needed. Two-backend parity had been passing throughout, because check_tools.py drives the tool
+code in the *checkout* against Aurora — a database claim standing in for a deployment claim.
+Step 7 reproduced the same shape: portfolio_summary_v1 applied to Aurora and every harness
+green, while the deployed function still predated the change.
+
+So the check written at this step is the one that would have caught it. server/build_info.py
+reads a _build_stamp.json that package_lambda.sh writes at package time, falling back to
+`git describe --dirty` locally, and app.py hands it to MCPServer as its version. check_auth.py
+then compares what the endpoint reports against the checkout.
+
+It fired before the redeploy, which is the only reason to trust it:
+
+$ scripts/check_auth.py
+ 11  F   the deployed server reports which commit it is running    0.3.0
+ 12  F   the deployed code is the code in this checkout            deployed unknown, local a3156dce4f75-dirty
+                                                                  — run scripts/package_lambda.sh and apply
+
+15 of 17 assertions passed -- 2 FAILED
+
+"deployed unknown" is the pre-step-7 build reporting the hardcoded 0.3.0 it was written with,
+which is exactly the state step 6 was in and had no way to see.
+
+Then package, apply, and the same command again:
+
+$ scripts/package_lambda.sh
+installing dependencies for linux/arm64, python 3.12
+copying application code
+stamped 0ee0243f3a5f
+building build/bizdata-server.zip
+packaged 1010 files, 8.9M
+
+$ terraform -chdir=infra/main apply
+aws_lambda_function.mcp: Modifications complete
+Plan: 0 to add, 1 to change, 0 to destroy.
+
+$ scripts/check_auth.py -v
+ 11  t   the deployed server reports which commit it is running          0.3.0+0ee0243f3a5f
+ 12  t   the deployed code is the code in this checkout                  deployed 0ee0243f3a5f, local 0ee0243f3a5f
+ 13  t   the deployment was not built from a tree with uncommitted chan  0.3.0+0ee0243f3a5f
+ 14  t   an authenticated tool call reaches Aurora                       HTTP 200, total_count=18
+
+17 of 17 assertions passed
+
+Assertion 13 is worth its own line. A stamp reading `-dirty` would mean the commit in
+serverInfo names a tree that is not the tree that was packaged, so the check would be
+reporting a hash that proves nothing. Refusing a dirty build is what makes 12 a real claim.
+
+======================================================================
+include_portfolio over HTTPS
+======================================================================
+
+The freshness check proves the bytes match. It does not prove the new argument works, so:
+one authenticated tools/call against the deployed endpoint, with include_portfolio true.
+
+  {"name": "list_engagements",
+   "arguments": {"as_of_date": "2026-08-31", "status": "active", "limit": 3,
+                 "include_portfolio": true}}
+
+HTTP 200
+engagements_active   18
+clients_active       11
+hours_to_date_total  25882.1
+blended_margin_pct   60.8   delta -2.9
+clients returned     11
+first client         Ashcombe Health Partners 51.0
+
+Identical to the same call made directly against Aurora over the Data API before the deploy,
+figure for figure. Three layers agreeing — portfolio_summary_v1 in Postgres, the Data API's
+string-to-Decimal coercion in server/dataapi.py, and the JSON that came back over HTTPS through
+Cognito — on numbers no client-side arithmetic touched.
+
+The deck's slide 2 reads from this block, so this is the call the Cowork run depends on.
