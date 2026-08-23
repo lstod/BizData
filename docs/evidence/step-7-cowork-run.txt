@@ -71,9 +71,14 @@ unreachable by burn or band, which is the whole point of the test:
   12  Credit Risk Programme    green band, 67.5% burn, 85.4% concentration, 24 days to end
    2  Credit Risk Migration    green band, status active, contract ended 2026-08-21
 
-85.4 is in the workbook. Engagement 12 was examined. Neither burn nor band selects it, and no
-compensating burn calls were made to find it — the trigger lists were stated before the burn and
-financials blocks were fetched at all.
+85.4 is in the workbook. Engagement 12 was examined. Neither burn nor band selects it.
+
+One caveat on the strength of this, stated rather than glossed: the "no fan-out" half rests on
+the run's narration order plus the examined column, not on a per-call list. Step 5 pulled an
+actual tool chain out of CloudWatch and that is the better artifact. Two independent things
+point the same way here — the trigger lists were written down before any burn or financials
+block was fetched, and the examined set is ten rather than eighteen — so the claim is well
+supported. It is not proved to step 5's standard. The calls are in the logs if it matters later.
 
 ======================================================================
 3. the figures, and whether any of them are invented
