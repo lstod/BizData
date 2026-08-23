@@ -75,3 +75,30 @@ string-to-Decimal coercion in server/dataapi.py, and the JSON that came back ove
 Cognito — on numbers no client-side arithmetic touched.
 
 The deck's slide 2 reads from this block, so this is the call the Cowork run depends on.
+
+======================================================================
+a consequence, observed immediately
+======================================================================
+
+Committing this file turned assertion 12 red again:
+
+ 12  F   the deployed code is the code in this checkout
+         deployed 0ee0243f3a5f, local 46a36c33e8dd — run scripts/package_lambda.sh and apply
+
+Not a bug. package_lambda.sh stamps `git describe`, so the stamp moves with HEAD whether or
+not a shipped file moved, and the script says so where it does it: "a docs-only commit forces
+a redeploy. Accepted, because a stamp that only moves when shipped files move cannot detect
+the thing it is for."
+
+The alternative considered and rejected is hashing the packaged tree instead. It would stay
+quiet through a docs commit, and it would also stop naming a commit — and naming one is half
+the value, because "deployed 0ee0243f3a5f" is something you can `git show`.
+
+What it does mean is an ordering rule, and this file is the first thing to trip over it:
+**commit, then deploy.** Deploying first and then writing up the deploy leaves the endpoint one
+commit behind its own evidence. The final deploy of step 7 is therefore the commit that carries
+this paragraph, applied after it landed, and `check_auth.py` is 17 of 17 against it.
+
+Which is the check behaving correctly. Steps 5 and 6 had no way to tell a current deployment
+from a stale one, and the cost of gaining that is a redeploy on commits that did not need one.
+Fifteen seconds of `terraform apply` against two Cowork runs that produced wrong deliverables.
