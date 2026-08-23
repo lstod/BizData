@@ -9,10 +9,10 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 7 and 14 of 14 are done. The
-server is deployed on AWS behind Cognito and answering tool calls from a Cowork connector;
-the Skills produce the engagement book and the partner deck, to a format that does not vary. The architecture write-up, the security
-posture and the demo land at step 11.
+assemble the pack. **Build in progress** — steps 0 through 7 and 14 of 14 are done. The server is
+deployed on AWS behind Cognito and answering tool calls from a Cowork connector; the Skills
+produce the engagement book and the partner deck, to a format that does not vary. The
+architecture write-up, the security posture and the demo land at step 11.
 
 ## All of the data here is synthetic
 

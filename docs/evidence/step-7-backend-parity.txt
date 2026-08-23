@@ -1,0 +1,174 @@
+step 7 — the step-3 deliverables did not move
+
+Two sections. The first is the sweep, which proves the new view and the new argument left
+every existing tool response alone. The second is the two-backend comparison steps 5 and 6
+also banked, extended to all three harnesses now that there are three.
+
+db/views/portfolio_summary_v1.sql is new and db/sql/list_engagements.sql is untouched,
+but server/tools/list_engagements.py gained an argument, so the same proof steps 3 and 6
+used applies: scripts/sweep.sh from a git worktree at the pre-change commit, and again
+against the working tree, across all seventeen fixture seeds.
+
+  git worktree add --detach /tmp/bizdata-baseline-wt HEAD      # 21a9693
+  PYTHON=.../.venv/bin/python /tmp/bizdata-baseline-wt/scripts/sweep.sh /tmp/sweep-before
+  scripts/sweep.sh /tmp/sweep-after
+  diff -r /tmp/sweep-before /tmp/sweep-after
+
+$ diff -r /tmp/sweep-before /tmp/sweep-after
+(no output: identical)
+
+$ cat /tmp/sweep-before/*.txt | wc -c ; cat /tmp/sweep-after/*.txt | wc -c
+   54850
+   54850
+
+$ ls /tmp/sweep-after
+seed-42.txt
+seed-43.txt
+seed-9001.txt
+seed-9002.txt
+seed-9003.txt
+seed-9004.txt
+seed-9005.txt
+seed-9006.txt
+seed-9007.txt
+seed-9008.txt
+seed-9009.txt
+seed-9010.txt
+seed-9011.txt
+seed-9012.txt
+seed-9013.txt
+seed-9014.txt
+seed-9015.txt
+
+======================================================================
+the three harnesses, every fixture seed, local Postgres
+======================================================================
+
+$ scripts/check_tools.py
+seed 42: 213 of 213 assertions passed
+seed 43: 213 of 213 assertions passed
+seed 9001: 213 of 213 assertions passed
+seed 9002: 213 of 213 assertions passed
+seed 9003: 213 of 213 assertions passed
+seed 9004: 213 of 213 assertions passed
+seed 9005: 213 of 213 assertions passed
+seed 9006: 213 of 213 assertions passed
+seed 9007: 213 of 213 assertions passed
+seed 9008: 213 of 213 assertions passed
+seed 9009: 213 of 213 assertions passed
+seed 9010: 213 of 213 assertions passed
+seed 9011: 213 of 213 assertions passed
+seed 9012: 213 of 213 assertions passed
+seed 9013: 213 of 213 assertions passed
+seed 9014: 213 of 213 assertions passed
+seed 9015: 213 of 213 assertions passed
+all seeds pass
+
+$ scripts/check_format.py
+seed 42: 44 of 44 assertions passed
+seed 43: 44 of 44 assertions passed
+seed 9001: 44 of 44 assertions passed
+seed 9002: 44 of 44 assertions passed
+seed 9003: 44 of 44 assertions passed
+seed 9004: 44 of 44 assertions passed
+seed 9005: 44 of 44 assertions passed
+seed 9006: 44 of 44 assertions passed
+seed 9007: 44 of 44 assertions passed
+seed 9008: 44 of 44 assertions passed
+seed 9009: 44 of 44 assertions passed
+seed 9010: 44 of 44 assertions passed
+seed 9011: 44 of 44 assertions passed
+seed 9012: 44 of 44 assertions passed
+seed 9013: 44 of 44 assertions passed
+seed 9014: 44 of 44 assertions passed
+seed 9015: 44 of 44 assertions passed
+all seeds pass
+
+$ scripts/check_pack.py
+seed 42: 32 of 32 assertions passed
+seed 43: 32 of 32 assertions passed
+seed 9001: 32 of 32 assertions passed
+seed 9002: 32 of 32 assertions passed
+seed 9003: 32 of 32 assertions passed
+seed 9004: 32 of 32 assertions passed
+seed 9005: 32 of 32 assertions passed
+seed 9006: 32 of 32 assertions passed
+seed 9007: 32 of 32 assertions passed
+seed 9008: 32 of 32 assertions passed
+seed 9009: 32 of 32 assertions passed
+seed 9010: 32 of 32 assertions passed
+seed 9011: 32 of 32 assertions passed
+seed 9012: 32 of 32 assertions passed
+seed 9013: 32 of 32 assertions passed
+seed 9014: 32 of 32 assertions passed
+seed 9015: 32 of 32 assertions passed
+all seeds pass
+
+======================================================================
+Aurora, captured 2026-08-23T22:56:16Z
+======================================================================
+
+Aurora was a step behind until now: the two new views existed only in local Postgres, so
+list_engagements(include_portfolio=true) would have failed there. scripts/seed.py gained a
+--views-only flag for exactly this — reapply db/views and the scoring weights without
+touching a row, which matters because reloading 40,000 time entries over the Data API is
+slow and would have moved a fixture that should not move.
+
+$ scripts/seed.py --seed 42 --period 2026-08 --backend aws --views-only
+seed 42, period 2026-08
+views only, no rows loaded
+  applied          db/seeds/scoring_weights.sql
+  applied          db/views/portfolio_coverage_v1.sql
+  applied          db/views/engagement_burn_v1.sql
+  applied          db/views/engagement_financials_v1.sql
+  applied          db/views/engagement_health_v1.sql
+  applied          db/views/portfolio_summary_v1.sql
+generated in 0.3s, loaded in 1.6s
+
+Before the harnesses, the claim that the two databases hold the same rows. db/checks/
+checksums.sql against both, same six lines, and the same six lines step 5 banked — so the
+fixture has not moved since the ceiling_hours reseed:
+
+  clients|12|4c26bf852c7d1e09b590772a1922f7a8
+  engagements|30|72826deaa18afba5468789021c1970ec
+  invoices|176|5e55e9c20bf519e99467d3edfe020b56
+  people|25|417f4d3a0f9211b466a2efe5f3b0d13a
+  sow_line_items|122|1410746fc9d30c38a114acb3ccac7773
+  time_entries|40000|dab2b2a3438e7d8346abf3c57eab4d25
+
+Then all three harnesses, seed 42, --no-reseed on both sides so each reads the database as
+it stands rather than rewriting it. 289 assertions in total: 213 + 32 + 44.
+
+$ diff <(check_tools --backend local -v) <(check_tools --backend aws -v)
+214c215
+< 211  t   run_id: the server mints one when the caller omits it   req-abe676ee816d, echoed in the response
+---
+> 211  t   run_id: the server mints one when the caller omits it   req-4a112e88bbdb, echoed in the response
+
+$ diff <(check_pack --backend local -v) <(check_pack --backend aws -v)
+15c16
+<  12  t   build_workbook ran and wrote the workbook   /tmp/bizdata-pack-zgnjtylw/engagement-book-2026-08-s
+---
+>  12  t   build_workbook ran and wrote the workbook   /tmp/bizdata-pack-aq398u2q/engagement-book-2026-08-s
+
+$ diff <(check_format --backend local -v) <(check_format --backend aws -v)
+14,15c15,16
+<  11  t   build_workbook ran and wrote its artifact   /tmp/bizdata-format-7p5pbycm/engagement-book-2026-08-seed-42
+<  12  t   build_deck ran and wrote its artifact       /tmp/bizdata-format-7p5pbycm/delivery-review-2026-08-seed-42
+---
+>  11  t   build_workbook ran and wrote its artifact   /tmp/bizdata-format-z1gynatu/engagement-book-2026-08-seed-42
+>  12  t   build_deck ran and wrote its artifact       /tmp/bizdata-format-z1gynatu/delivery-review-2026-08-seed-42
+
+Across 617 lines of assertion output the only differences are a run_id the server mints
+randomly — assertion 211 exists to prove it is random — and the mkdtemp paths the two runs
+wrote their artifacts into. Nothing about a number differs.
+
+That is the part worth stating plainly. portfolio_summary_v1 does the rollup in SQL, which
+means the blended margin on slide 2 is a numeric computed by Postgres and then coerced back
+out of a string by server/dataapi.py on the Aurora path and handed over as a Decimal by
+psycopg on the local one. The two paths agree to the last decimal place, and check_format's
+cross-check — workbook Summary totals against the SQL rollup — passed on both.
+
+Not yet done, and not blocked by anything here: the Lambda still runs the pre-step-7 build,
+so the deployed server does not accept include_portfolio. Redeploy, then check_auth.py,
+which now asserts the deployed commit matches the checkout.

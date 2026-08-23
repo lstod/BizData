@@ -1,0 +1,94 @@
+
+seed 42
+     ok  assertion                                                                  detail
+  1  t   skill: house-format/SKILL.md exists                                        plugin/skills/house-format/SKILL.md
+  2  t   skill: frontmatter says what the skill is for and when it fires            584 chars of frontmatter
+  3  t   skill: states the five tabs in order                                       present
+  4  t   skill: states the burn thresholds                                          present
+  5  t   skill: states the fee-type margin branch                                   present
+  6  t   skill: states the two percent scales                                       present
+  7  t   skill: states slide 8 never being dropped                                  present
+  8  t   skill: states the no-adjectives voice rule                                 present
+  9  t   skill: states stopping rather than substituting a builder                  present
+ 10  t   skill: the self-check asset exists and is pointed at from the body         55 lines
+ 11  t   build_workbook ran and wrote its artifact                                  /tmp/ev7/engagement-book-2026-08-seed-42.xlsx: 18 engagements, 75 time detail rows, 0 exception(s), 1 we
+ 12  t   build_deck ran and wrote its artifact                                      /tmp/ev7/delivery-review-2026-08-seed-42.pptx: 6 slides, 8 engagement(s) at risk, 11 client(s) charted, 
+ 13  t   workbook: burn_pct is a live formula on every row, not a pasted value      18 of 18 row(s) hold a formula
+ 14  t   workbook: burn_pct reads the columns it is defined over                    references ['J', 'K'], needs ['J', 'K'] (hours_to_date, ceiling_hours)
+ 15  t   workbook: burn_pct is guarded so an unexamined row stays blank             =IF(N(J2)>0,K2/J2,"")
+ 16  t   workbook: projected_overrun_pct is a live formula on every row, not a past 18 of 18 row(s) hold a formula
+ 17  t   workbook: projected_overrun_pct reads the columns it is defined over       references ['J', 'Y'], needs ['J', 'Y'] (projected_total_hours, ceiling_hours)
+ 18  t   workbook: projected_overrun_pct is guarded so an unexamined row stays blan =IF(AND(N(J2)>0,Y2<>""),MAX(0,Y2-J2)/J2,"")
+ 19  t   workbook: margin_pct is a live formula on every row, not a pasted value    18 of 18 row(s) hold a formula
+ 20  t   workbook: margin_pct reads the columns it is defined over                  references ['AI', 'AJ', 'E', 'M'], needs ['AI', 'AJ', 'E', 'M'] (cost_to_date, ceiling_amount, billable_value_to_date, fee_type)
+ 21  t   workbook: margin_pct is guarded so an unexamined row stays blank           =IF(AI2="","",IF(E2="fixed",IF(N(M2)>0,(M2-AI2)/M2,""),IF(N(AJ2)>0,(AJ2-AI2)/AJ2,"")))
+ 22  t   workbook: every formatted column carries its house number format on every  10 column(s) checked
+ 23  t   workbook: the tool-scaled percentages keep the literal sign, not the scali concentration 0.0"%", burn 0.0%
+ 24  t   workbook: burn carries the two conditional formatting rules, at 0.90 and 0 [0.9, 0.7] on L2:L19
+ 25  t   workbook: red is tested before amber, so a red cell is not painted amber   first rule at 0.9
+ 26  t   workbook: the rules cover every engagement row, not only the examined ones L2:L19 for 18 row(s)
+ 27  t   workbook: the live burn formula agrees with the database on every row      18 row(s)
+ 28  t   workbook: the fee-type margin branch agrees with the database on every exa 10 examined row(s)
+ 29  t   workbook: the Engagements tab and the SQL rollup agree on the portfolio to hours and ceiling hours agree
+ 30  t   workbook: Summary carries the blended margin, which no formula over the ta 60.8% on the tab, 60.8% from SQL
+ 31  t   deck: the four fixed slides come first, in the house order                 Delivery and margin review | Portfolio summary | Margin by client | Engagements at risk
+ 32  t   deck: data quality and caveats is the last slide, always                   slide 6 of 6: Data quality and caveats
+ 33  t   deck: the RED section sits between engagements at risk and the caveats     1 slide(s): Engagements flagged RED
+ 34  t   deck: six to eight slides, the format's full extent being eight            6 slides
+ 35  t   deck: margin by client is a chart object with one column per client        1 chart(s), 11 categories for 11 client(s)
+ 36  t   deck: the chart's categories are the client names from the portfolio block 11 name(s) matched
+ 37  t   deck: nothing on a slide calls the low-coverage week a slowdown            no banned wording on any slide
+ 38  t   deck: every low-confidence projection carries its reason onto a slide      1 low-confidence projection(s), all labelled
+ 39  t   deck: every number on a slide is in the workbook or the pack it was built  2031 known figure(s) checked
+ 40  t   deck: a clean period still gets its caveats slide, last and in full        6 slides, last is 'Data quality and caveats'
+ 41  t   deck: on a clean period the caveats slide states the absence rather than g coverage and confidence both stated as clean
+ 42  t   deck: a clean period says no engagement was flagged rather than dropping t ['Engagements flagged RED']
+ 43  t   build_deck refuses a pack with no portfolio block                          error: pack has no portfolio block, so the summary and margin-by-client slides have no source. Call list
+ 44  t   build_deck refuses a pack with no engagements                              error: engagements is empty. A pack with no engagements is a failed run, not an empty month; stop and re
+seed 42: 44 of 44 assertions passed
+
+workbooks and decks left in /tmp/ev7
+
+all seeds pass
+
+======================================================================
+scripts/check_pack.py --seed 42   (step 6's harness, after the burn scale change)
+======================================================================
+
+seed 42
+     ok  assertion                                                                  detail
+  1  t   skill: SKILL.md exists                                                     plugin/skills/assemble-delivery-pack/SKILL.md
+  2  t   skill: frontmatter names the skill and describes when to use it            525 chars of frontmatter
+  3  t   skill: states the concentration trigger                                    present
+  4  t   skill: states the ended-inside-the-period trigger                          present
+  5  t   skill: states the portfolio-wide coverage call                             present
+  6  t   skill: states the no-arithmetic rule                                       present
+  7  t   skill: states the ceiling rule                                             present
+  8  t   skill: forbids calling the low-coverage week a delivery slowdown, in those stated as a prohibition
+  9  t   pack: paging reached total_count before any analysis began                 18 of 18 over 4 pages
+ 10  t   pack: one portfolio-wide time summary, not one per engagement              unscoped, grouped by engagement,week
+ 11  t   pack: detail was pulled for a subset rather than the whole portfolio       10 of 18 engagements examined
+ 12  t   build_workbook ran and wrote the workbook                                  /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-pack-zj46lnk4/engagement-book-2026-08-s
+ 13  t   workbook: five tabs, in the house order                                    Summary, Engagements, Time Detail, Exceptions, Data Quality
+ 14  t   workbook: every engagement in the portfolio reached the book               18 rows for total_count 18
+ 15  t   workbook: every row carries its engagement_id                              18 of 18
+ 16  t   workbook: the examined engagements are the ones the triggers chose         10 of 18 examined
+ 17  t   mess case 8: the concentrated engagement was examined                      engagement 12 at 85.4% concentration, burn 67.5%, band green
+ 18  t   mess case 6: the engagement that ended inside the period was examined      engagement 2 ended 2026-08-21, burn 29.1%
+ 19  t   workbook: run rates are the tools' figures, not re-derived ones            every examined row matches its tool response
+ 20  t   workbook: the live burn formula and the database agree on every row        18 row(s) within half a decimal place
+ 21  t   workbook: every low-confidence projection carries its reason               1 low-confidence projection(s), all labelled
+ 22  t   workbook: portfolio totals on Summary are formulas over the Engagements ta 10 formula(s) referencing Engagements, 11 in total
+ 23  t   workbook: Summary carries the scoring model version                        v1.0
+ 24  t   workbook: the gap week's rows are present in Time Detail and flagged, not  3 row(s) for the week of 2026-08-10, all flagged
+ 25  t   mess case 7: the low-coverage week appears on Data Quality as a data note  week of 2026-08-10 noted
+ 26  t   mess case 7: the note says the week is excluded from run rates and project stated
+ 27  t   workbook: the two data blocks stay separate on the tab                     both sections present
+ 28  t   mess case 7: nothing in the pack calls the week a delivery slowdown        no banned wording anywhere in the workbook
+ 29  t   workbook: an Exceptions tab with nothing on it says so                     stated rather than left blank
+ 30  t   workbook: a flagged engagement reaches the Exceptions tab with its decisio 1 row(s), owner engagement lead
+ 31  t   build_workbook refuses a time summary scoped to some engagements           error: time_summary was scoped to specific engagement_ids, so its data_completeness block measur
+ 32  t   build_workbook refuses an empty engagement list                            error: engagements is empty. A pack with no engagements is a failed run, not an empty month; sto
+seed 42: 32 of 32 assertions passed
+
+all seeds pass
