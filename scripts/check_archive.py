@@ -211,6 +211,17 @@ def check_grant(endpoint: str, token: str, s3, bucket: str, checks: Checks) -> d
         all("X-Amz-Expires=900" in u for u in urls.values()),
         "X-Amz-Expires=900",
     )
+    # Signed with SigV4, asserted because getting this wrong is invisible from the refusals.
+    # boto3 presigns with SigV2 unless told otherwise, and a SigV2 url against this bucket is
+    # refused with 403 SignatureDoesNotMatch — the same status and code as a url used on the
+    # wrong key. Every negative below passed while nothing could be written at all. See the
+    # docstring of S3Archive in server/archive.py.
+    first = list(urls.values())[0]
+    checks.add(
+        "and is signed with SigV4, not the legacy signature",
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256" in first and "AWSAccessKeyId=" not in first,
+        "AWS4-HMAC-SHA256" if "AWS4-HMAC-SHA256" in first else "SigV2 — refusals below are meaningless",
+    )
 
     # The positive. One PUT, one key.
     status, detail = put(urls[WORKBOOK], WORKBOOK_BYTES)

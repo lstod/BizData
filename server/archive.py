@@ -120,12 +120,23 @@ class S3Archive:
     Lambda refreshes those on a scale of hours and this asks for fifteen minutes, so the
     stated expiry is always the binding one — but it is the direction the surprise would
     come from if a URL ever died early.
+
+    The signature version is set explicitly, and it has to be. Left to itself boto3 presigns
+    S3 URLs with **SigV2** — the giveaway is ``AWSAccessKeyId=`` in the query string where
+    SigV4 puts ``X-Amz-Algorithm=AWS4-HMAC-SHA256`` — against the global ``s3.amazonaws.com``
+    endpoint, and a SigV2 URL signed for the wrong region is refused by a bucket in us-west-2
+    with ``403 SignatureDoesNotMatch``. That is the same status and the same error code S3
+    returns when a URL is used on a key it was not signed for, so the bug and the security
+    property it breaks are indistinguishable from the outside: every refusal assertion in
+    scripts/check_archive.py passed while nothing could be uploaded at all. The positive
+    assertion is what caught it.
     """
 
     name = "s3"
 
     def __init__(self, bucket: str | None = None, prefix: str = DEFAULT_PREFIX) -> None:
         import boto3
+        from botocore.config import Config
 
         resolved = bucket or os.environ.get("BIZDATA_RUNS_BUCKET")
         if not resolved:
@@ -135,7 +146,15 @@ class S3Archive:
             )
         self.bucket = str(resolved)
         self.prefix = prefix
-        self.client: Any = boto3.client("s3")
+        # Region explicitly too, for the other half of the same problem: SigV4 binds the
+        # region into the signature, so signing for us-east-1 against a us-west-2 bucket
+        # fails the same way. Lambda always sets AWS_REGION; locally boto3 resolves it from
+        # the profile, which is why the fallback is None rather than a guess.
+        self.client: Any = boto3.client(
+            "s3",
+            region_name=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION"),
+            config=Config(signature_version="s3v4"),
+        )
 
     @property
     def destination(self) -> str:
