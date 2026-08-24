@@ -1,0 +1,46 @@
+======================================================================
+step 9 -- scripts/check_archive.py against s3://bizdata-runs-142940389238
+generated 2026-08-24T03:34:37Z, commit 41351f2+wt
+--wait-for-expiry: the fifteen-minute url is left to expire on the clock
+======================================================================
+
+waiting 900s for the real url to expire, from 2026-08-24T03:34:42+00:00
+     ok  assertion                                                      detail
+  1  t   the bucket has versioning on                                   Enabled
+  2  t   and a Glacier lifecycle rule at ninety days                    90d to GLACIER
+  3  t   and the same rule for the versions the bucket keeps            90d to GLACIER
+  4  t   and no path to public access                                   all four blocked
+  5  t   the role can write objects                                     s3:GetObject, s3:PutObject
+  6  t   and only under the runs/ prefix                                arn:aws:s3:::bizdata-runs-142940389238/runs/*
+  7  t   and cannot delete anything it has archived                     no delete actions
+  8  t   and can read back its own tool-call log                        arn:aws:logs:us-west-2:142940389238:log-group:/aws/lambda/bizdata-mcp-server:*
+  9  t   the deployed tool mints a url per artifact                     HTTP 200 {
+  "run_id": "check-archive",
+  "total_count": 2,
+  "return
+ 10  t   the url is https and points at the archive bucket              https://bizdata-runs-142940389238.s3.amazonaws.com/runs/check-archive/engagement-book-2026-08.xlsx
+ 11  t   the url expires, and says when                                 X-Amz-Expires=900
+ 12  t   and is signed with SigV4, not the legacy signature             AWS4-HMAC-SHA256
+ 13  t   a presigned url writes its one key                             HTTP 200 
+ 14  t   and the object in the bucket is the bytes that were sent       556 bytes, ef099ab0b14e
+ 15  t   the same url is refused on any other key                       HTTP 403 SignatureDoesNotMatch
+ 16  t   and nothing landed at that other key                           absent
+ 17  t   a url edited to escape the prefix is refused                   HTTP 403 SignatureDoesNotMatch
+ 18  t   a url signed for PUT is refused for GET                        HTTP 403 SignatureDoesNotMatch
+ 19  t   the same key with no signature at all is refused               HTTP 403 AccessDenied
+ 20  t   the second artifact writes its own key                         HTTP 200 
+ 21  t   an expired url is refused                                      HTTP 403 AccessDenied
+ 22  t   and nothing landed                                             absent
+ 23  t   the fifteen-minute url is refused after fifteen minutes        HTTP 403 AccessDenied, minted 2026-08-24T03:34:42+00:00
+ 24  t   finalising writes the log and the ledger                       HTTP 200 {
+  "run_id": "check-archive",
+  "total_count": 4,
+  "return
+ 25  t   runs/<run_id>/ holds all four artifacts                        delivery-review-2026-08.pptx, engagement-book-2026-08.xlsx, ledger.json, run-log.json
+ 26  t   the ledger in the bucket is complete and names this run        complete, check-archive
+ 27  t   and records the deployed build that wrote it                   0.3.0+41351f2f729c
+ 28  t   the tool-call log came back out of CloudWatch                  4 line(s)
+ 29  t   and holds only this run's lines                                1 distinct run id(s)
+ 30  t   and the ledger's count agrees with the file beside it          4 against 4
+
+30 of 30 assertions passed

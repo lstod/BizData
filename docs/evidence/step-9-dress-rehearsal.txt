@@ -1,0 +1,43 @@
+======================================================================
+step 9 -- a full pack built from Aurora and published through the
+          deployed endpoint, every call over authenticated HTTPS
+generated 2026-08-24T03:50:20Z, commit 41351f2
+======================================================================
+
+The dress rehearsal for the Cowork run. Real artifacts rather than probe
+bytes, real presigned URLs minted by the real Lambda, and every analysis
+call routed through the deployed endpoint so that publish_pack has a
+genuine CloudWatch record to gather rather than one line of its own.
+
+The run id is minted fresh. An earlier pass reused one and archived 53
+lines instead of 26, because CloudWatch is queried over a 24-hour window
+and both passes' calls legitimately carried that id. Run ids are unique
+per run, and this is what happens when they are not.
+
+Loading cached SSO token for bizdata
+1. gathering the pack over HTTPS, through the skill's order of operations
+   18 engagements, 10 examined in detail
+2. classify, then the two builders
+   /tmp/dress-rehearsal/pack.json: 7 exception(s) — 5 RED, 2 NEEDS REVIEW. cause and recommended_action are left 
+   /tmp/dress-rehearsal/engagement-book-2026-08.xlsx: 18 engagements, 75 time detail rows, 7 exception(s), 1 week
+   /tmp/dress-rehearsal/delivery-review-2026-08.pptx: 8 slides, 8 engagement(s) at risk, 11 client(s) charted, 5 
+   {'engagement-book-2026-08.xlsx': 21291, 'delivery-review-2026-08.pptx': 48006}
+3. publish_pack, phase one, against the deployed endpoint
+   2 urls, 900s, prefix runs/rehearsal-035020
+4. uploading the real artifacts
+   PUT engagement-book-2026-08.xlsx    21291 bytes  HTTP 200 
+   PUT delivery-review-2026-08.pptx    48006 bytes  HTTP 200 
+5. publish_pack, phase two
+   agent   runs/rehearsal-035020/engagement-book-2026-08.xlsx               21291 bytes
+   agent   runs/rehearsal-035020/delivery-review-2026-08.pptx               48006 bytes
+   server  runs/rehearsal-035020/run-log.json                                8415 bytes
+   server  runs/rehearsal-035020/ledger.json                                 1519 bytes
+   tool_calls_archived: 26
+6. verifying from outside the run
+   4 objects in runs/rehearsal-035020/
+   engagement-book-2026-08.xlsx: bytes in S3 match the file on disk
+   delivery-review-2026-08.pptx: bytes in S3 match the file on disk
+   ledger: complete, model v1.0, build 0.3.0+41351f2f729c
+   ledger tools_used: {"get_engagement_burn": 10, "get_financials": 10, "get_time_summary": 1, "list_engagements": 4, "publish_pack": 1}
+   run-log.json: 26 line(s), 1 distinct run id(s)
+   exceptions in the pack: 7

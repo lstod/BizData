@@ -1,0 +1,43 @@
+======================================================================
+step 9 -- a presigned PUT is refused on any key but the one it names
+generated 2026-08-24T03:37:16Z, commit 41351f2
+======================================================================
+
+The URL used below was minted by the deployed Lambda, over authenticated
+HTTPS, for exactly one key:
+
+    runs/rejection-evidence/engagement-book-2026-08.xlsx
+
+The key is inside the SigV4 signature. S3 recomputes the signature over
+whatever key the request actually asks for, so the same URL aimed anywhere
+else produces a different signature and is refused. Each attempt below is
+byte-identical except for the path.
+
+----------------------------------------------------------------------
+the four attempts
+----------------------------------------------------------------------
+    PUT /runs/rejection-evidence/engagement-book-2026-08.xlsx
+    -> HTTP 200
+
+    PUT /runs/rejection-evidence/engagement-BOOK-2026-08.xlsx
+    -> HTTP 403  SignatureDoesNotMatch
+
+    PUT /runs/some-other-run/engagement-book-2026-08.xlsx
+    -> HTTP 403  SignatureDoesNotMatch
+
+    PUT /engagement-book-2026-08.xlsx  (outside the runs/ prefix)
+    -> HTTP 403  SignatureDoesNotMatch
+
+SignatureDoesNotMatch rather than AccessDenied is the useful distinction:
+S3 is saying the signature does not cover this key, not that the caller
+lacks permission. The URL is not a credential that was scoped down -- it
+is only valid for the one request it describes.
+
+----------------------------------------------------------------------
+what is in the bucket afterwards
+----------------------------------------------------------------------
+    the granted key, and only the granted key:
+      2026-08-23 20:37:18          5 runs/rejection-evidence/engagement-book-2026-08.xlsx
+
+    at the bucket root, where attempt 4 aimed:      0 object(s)
+    in runs/some-other-run/, where attempt 3 aimed: 0 object(s)

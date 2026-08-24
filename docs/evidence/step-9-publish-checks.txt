@@ -1,6 +1,6 @@
 ======================================================================
 step 9 -- publish_pack, all five harnesses, all seventeen seeds
-generated 2026-08-24T03:22:13Z, commit 3a3fa1b+wt
+generated 2026-08-24T04:09:00Z, commit 41351f2+wt
 ======================================================================
 
 ----------------------------------------------------------------------
@@ -98,22 +98,22 @@ all seeds pass
 ----------------------------------------------------------------------
 scripts/check_publish.py
 ----------------------------------------------------------------------
-seed 42: 77 of 77 assertions passed
-seed 43: 77 of 77 assertions passed
-seed 9001: 77 of 77 assertions passed
-seed 9002: 77 of 77 assertions passed
-seed 9003: 77 of 77 assertions passed
-seed 9004: 77 of 77 assertions passed
-seed 9005: 77 of 77 assertions passed
-seed 9006: 77 of 77 assertions passed
-seed 9007: 77 of 77 assertions passed
-seed 9008: 77 of 77 assertions passed
-seed 9009: 77 of 77 assertions passed
-seed 9010: 77 of 77 assertions passed
-seed 9011: 77 of 77 assertions passed
-seed 9012: 77 of 77 assertions passed
-seed 9013: 77 of 77 assertions passed
-seed 9014: 77 of 77 assertions passed
-seed 9015: 77 of 77 assertions passed
+seed 42: 78 of 78 assertions passed
+seed 43: 78 of 78 assertions passed
+seed 9001: 78 of 78 assertions passed
+seed 9002: 78 of 78 assertions passed
+seed 9003: 78 of 78 assertions passed
+seed 9004: 78 of 78 assertions passed
+seed 9005: 78 of 78 assertions passed
+seed 9006: 78 of 78 assertions passed
+seed 9007: 78 of 78 assertions passed
+seed 9008: 78 of 78 assertions passed
+seed 9009: 78 of 78 assertions passed
+seed 9010: 78 of 78 assertions passed
+seed 9011: 78 of 78 assertions passed
+seed 9012: 78 of 78 assertions passed
+seed 9013: 78 of 78 assertions passed
+seed 9014: 78 of 78 assertions passed
+seed 9015: 78 of 78 assertions passed
 
 all seeds pass

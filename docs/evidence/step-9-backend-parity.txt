@@ -1,0 +1,80 @@
+======================================================================
+step 9 -- local Postgres vs the RDS Data API, seed 42
+generated 2026-08-24T04:17:07Z, commit 41351f2+wt
+======================================================================
+
+All five harnesses, seed 42, run once on each backend. 427 assertions a side.
+
+  check_tools       222   (213 at step 8, plus the fifth tool's schema)
+  check_pack         32
+  check_format       46
+  check_escalation   49
+  check_publish      78   (new at step 9)
+
+This run also re-verified Aurora after step 9 reseeded it by accident sixteen times.
+See docs/notes/step-9-publish.md, "This edits a step-3 deliverable".
+
+----------------------------------------------------------------------
+1. the diff, whole run
+----------------------------------------------------------------------
+
+$ diff local.txt aurora.txt
+
+0a1
+> Loading cached SSO token for bizdata
+3a5
+> Loading cached SSO token for bizdata
+6a9
+> Loading cached SSO token for bizdata
+9a13
+> Loading cached SSO token for bizdata
+12a17
+> Loading cached SSO token for bizdata
+
+The only difference is botocore announcing the cached SSO token on each of the five
+invocations. Every assertion, every count and every figure is identical.
+
+----------------------------------------------------------------------
+2. local Postgres
+----------------------------------------------------------------------
+
+seed 42: 222 of 222 assertions passed
+
+all seeds pass
+seed 42: 32 of 32 assertions passed
+
+all seeds pass
+seed 42: 46 of 46 assertions passed
+
+all seeds pass
+seed 42: 49 of 49 assertions passed
+
+all seeds pass
+seed 42: 78 of 78 assertions passed
+
+all seeds pass
+
+----------------------------------------------------------------------
+3. the RDS Data API
+----------------------------------------------------------------------
+
+Loading cached SSO token for bizdata
+seed 42: 222 of 222 assertions passed
+
+all seeds pass
+Loading cached SSO token for bizdata
+seed 42: 32 of 32 assertions passed
+
+all seeds pass
+Loading cached SSO token for bizdata
+seed 42: 46 of 46 assertions passed
+
+all seeds pass
+Loading cached SSO token for bizdata
+seed 42: 49 of 49 assertions passed
+
+all seeds pass
+Loading cached SSO token for bizdata
+seed 42: 78 of 78 assertions passed
+
+all seeds pass

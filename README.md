@@ -258,7 +258,9 @@ server/
   db.py                   local Postgres, or the RDS Data API
   auth.py                 Cognito token verification, ~60 lines
   toollog.py              one JSON line per call, seven fields
-  tools/                  the four read tools, one module each
+  archive.py              a directory, or the S3 bucket the runs land in
+  runlog.py               an in-process buffer, or CloudWatch Logs
+  tools/                  the four read tools and publish_pack, one module each
 plugin/
   skills/                 the Skills, one directory each
     assemble-delivery-pack/
@@ -278,6 +280,9 @@ scripts/
   check_tools.py          the tools' Done-when conditions, as assertions
   check_pack.py           the pack's, asserted against the workbook on disk
   check_format.py         the house format's, against the workbook and the deck
+  check_escalation.py     the escalation policy's, against the Exceptions tab
+  check_publish.py        the archive's, against a directory standing in for the bucket
+  check_archive.py        the archive's, against the real bucket over HTTPS
   sweep.sh                the SQL checks across every reserved seed
   package_skill.sh        zip a Skill directory for upload, without the macOS cruft
 docker-compose.yml        local Postgres for steps 1 to 4

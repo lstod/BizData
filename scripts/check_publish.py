@@ -154,6 +154,7 @@ def check_skill_document(checks: Checks) -> None:
         ("Save both files to the Drive folder", "the drive step"),
         ("run id in the filename", "the drive naming rule"),
         ("Drive is output only", "the read-path rule"),
+        ("Never reuse a run id", "the run-id uniqueness rule"),
         ("stop and say so", "the stop rule"),
     ):
         checks.add(f"skill: states {what}", phrase in text, "present" if phrase in text else "absent")

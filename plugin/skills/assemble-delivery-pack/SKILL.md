@@ -260,6 +260,11 @@ fresh ones.
 writes them itself; naming either as an artifact is refused. Publish the workbook and the deck,
 nothing else.
 
+**Never reuse a run id from an earlier run.** The archived tool-call log is gathered by filtering
+the last twenty-four hours of the server's log on the run id, so a reused id archives both runs'
+calls in one file and the ledger's count follows it. Republishing *this* run under its own id is
+fine and is what to do if an upload failed.
+
 **3. Save both files to the Drive folder**, with the run id in the filename:
 
 ```

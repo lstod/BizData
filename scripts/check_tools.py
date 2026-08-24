@@ -123,10 +123,24 @@ def anchors_for(seed: int) -> dict[str, Any]:
 
 
 def reseed(seed: int, dsn: str) -> None:
+    """Reload local Postgres. Never Aurora, and ``--backend local`` is what guarantees it.
+
+    seed.py's ``--backend`` defaults to ``None``, which falls through to
+    ``BIZDATA_DB_BACKEND``. Passing only ``--dsn`` is therefore not enough: in a shell where
+    `terraform output shell_exports` has been evaluated — which is every shell that has
+    touched the deployment — that variable says ``aws``, and this function silently rewrites
+    the *deployed* database seventeen times while the harness goes on reading local Postgres.
+
+    The symptom is seed 42 passing and every other seed failing with figures that look like
+    data corruption, which is a long way from the cause. Found at step 9, after it had
+    reseeded Aurora sixteen times. Every harness reseeds through this function, so pinning it
+    here fixes all five.
+    """
     subprocess.run(
         [
             sys.executable, str(REPO_ROOT / "scripts" / "seed.py"),
             "--seed", str(seed), "--period", PERIOD, "--dsn", dsn,
+            "--backend", "local",
         ],
         check=True, capture_output=True,
     )
