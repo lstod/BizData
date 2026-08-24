@@ -62,6 +62,11 @@ output "shell_exports" {
     "export BIZDATA_MASTER_SECRET_ARN=${aws_rds_cluster.main.master_user_secret[0].secret_arn}",
     "export BIZDATA_DATABASE=${var.db_name}",
     "export BIZDATA_MCP_ENDPOINT=${aws_apigatewayv2_api.main.api_endpoint}/mcp",
+    # For scripts/check_archive.py, which reads the bucket directly to assert the
+    # things a presigned URL cannot show: versioning, the lifecycle rule, and that
+    # the four objects a finalised run claims are really there.
+    "export BIZDATA_RUNS_BUCKET=${aws_s3_bucket.runs.id}",
+    "export BIZDATA_LOG_GROUP=${aws_cloudwatch_log_group.lambda.name}",
   ])
 }
 
