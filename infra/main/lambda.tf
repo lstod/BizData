@@ -61,6 +61,45 @@ data "aws_iam_policy_document" "lambda" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = [aws_secretsmanager_secret.mcp_readonly.arn]
   }
+
+  # Step 9. The server's only write, and it is narrower than it looks: PutObject
+  # under one prefix of one bucket. No DeleteObject, so nothing already archived
+  # can be removed; no ListBucket, so it cannot enumerate other runs; no bucket
+  # ACL or policy actions, so it cannot widen its own access.
+  #
+  # This statement is also the second fence around key confinement. The key is
+  # built in server/tools/publish_pack.py from a validated run id and a validated
+  # bare filename, and a presigned URL inherits the signer's permissions — so a
+  # key that escaped that validation would still be refused here. Two independent
+  # mechanisms, because the first one is code and the second one is not.
+  statement {
+    sid       = "WriteTheRunArchiveAndNothingElse"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.runs.arn}/runs/*"]
+  }
+
+  # HeadObject is authorised as GetObject, and head is how publish_pack finds out
+  # whether the artifacts it is about to vouch for actually arrived. Without this
+  # the ledger entry could only ever record an intention.
+  statement {
+    sid       = "ReadBackWhatWasJustWritten"
+    effect    = "Allow"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.runs.arn}/runs/*"]
+  }
+
+  # The tool-call log is the server's own record, so the server gathers it rather
+  # than trusting the agent's account of its own calls. AWSLambdaBasicExecutionRole
+  # grants CreateLogStream and PutLogEvents but not FilterLogEvents, so writing to
+  # the log group does not imply being able to read it back and this is a real
+  # addition rather than a redundant one. Scoped to this function's own group.
+  statement {
+    sid       = "ReadThisFunctionsOwnToolCallLog"
+    effect    = "Allow"
+    actions   = ["logs:FilterLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.lambda.arn}:*"]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda" {
@@ -108,6 +147,14 @@ resource "aws_lambda_function" "mcp" {
         BIZDATA_CLUSTER_ARN = aws_rds_cluster.main.arn
         BIZDATA_SECRET_ARN  = aws_secretsmanager_secret.mcp_readonly.arn
         BIZDATA_DATABASE    = var.db_name
+
+        # Step 9's two seams, selected the same way BIZDATA_DB_BACKEND selects
+        # the database. Both default to their local implementations when unset,
+        # so `uvicorn server.app:app` on a laptop still needs no AWS account.
+        BIZDATA_ARCHIVE_BACKEND = "s3"
+        BIZDATA_RUNS_BUCKET     = aws_s3_bucket.runs.id
+        BIZDATA_RUNLOG_BACKEND  = "cloudwatch"
+        BIZDATA_LOG_GROUP       = aws_cloudwatch_log_group.lambda.name
 
         # The adapter itself. AWS_LAMBDA_EXEC_WRAPPER is what activates the
         # layer at all.

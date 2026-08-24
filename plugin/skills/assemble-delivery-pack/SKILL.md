@@ -230,4 +230,53 @@ and produces a tab saying no engagement was flagged, which is itself a finding.
 
 The scripts write five tabs in order — `Summary`, `Engagements`, `Time Detail`, `Exceptions`,
 `Data Quality` — and the deck's slides in `house-format`'s order, reporting the gap week on the
-last tab and the last slide. Tell the user where both files landed.
+last tab and the last slide.
+
+## Publishing
+
+The two files are on disk in a working directory. Publishing puts them somewhere they survive.
+Both destinations, in this order, every run.
+
+**1. The archive of record.** Call `publish_pack` with this run's `run_id`, the period, and the
+two filenames:
+
+```
+publish_pack(run_id="<this run's id>", period="2026-08",
+             artifacts=["engagement-book-2026-08.xlsx", "delivery-review-2026-08.pptx"])
+```
+
+It returns one presigned upload URL per file, each scoped to a single object key under
+`runs/<run_id>/` and valid for fifteen minutes. Upload each file to its own URL with an HTTP
+`PUT` of the raw bytes. A URL writes the one key it was minted for and nothing else, so do not
+reuse one URL for both files.
+
+**2. Close the run out.** Call `publish_pack` again with the same three arguments and
+`finalize=true`. It checks that both artifacts arrived, then writes this run's full tool-call log
+and its ledger entry beside them. If it says a file did not arrive, the upload failed — retry that
+upload rather than the call. If a URL has expired, call `publish_pack` without `finalize` to mint
+fresh ones.
+
+**Do not upload `run-log.json` or `ledger.json`.** They are the server's record of this run and it
+writes them itself; naming either as an artifact is refused. Publish the workbook and the deck,
+nothing else.
+
+**3. Save both files to the Drive folder**, with the run id in the filename:
+
+```
+engagement-book-2026-08-<run_id>.xlsx
+delivery-review-2026-08-<run_id>.pptx
+```
+
+The archive is keyed by run id in its path, and Drive is flat, so the id moves into the filename
+to keep the same two files findable from either side. This is the one place the house format's
+filenames are extended, and `house-format` says so.
+
+**Drive is output only.** Never read a figure back from a file in Drive — not this run's, not last
+month's. Every number in the pack comes from a tool call against the data layer, and a folder that
+becomes a second source of figures is how two versions of last month's margin start circulating.
+
+If `publish_pack` is not available, **stop and say so** and report where the files are on disk. Do
+not upload them anywhere else, and do not treat a local path as a published pack.
+
+Then tell the user all three destinations: the working directory, the archive prefix, and the
+Drive folder.

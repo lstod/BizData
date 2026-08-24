@@ -18,8 +18,14 @@ Seven fields, every line:
     scoring_model_version  the weights in force when the answer was computed
 
 Locally the line goes to stdout. Deployed at step 5 the same line lands in CloudWatch Logs
-untouched, because it is already one JSON object per line, and each run's full set is
-written to S3 under runs/<run_id>/ at step 9.
+untouched, because it is already one JSON object per line, and step 9's ``publish_pack``
+writes each run's full set to S3 under runs/<run_id>/.
+
+Every line is also kept in a bounded in-process deque, which is what ``server/runlog.py``
+reads on the local backend — there is no CloudWatch on a laptop, and the harness is one
+process, so the buffer holds the whole run. It is not a handler, deliberately: all four
+seeded harnesses clear the logger's handlers and attach their own, and a buffer that could
+be detached that way would be empty exactly when it was needed.
 
 On run_id: MCP has been stateless since the 2026-07-28 revision, so the server cannot infer
 that six calls belong to one run — there is no session to hang it on, and Cowork's connector
@@ -37,6 +43,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Callable, TypeVar
@@ -46,6 +53,13 @@ LOGGER_NAME = "bizdata.toolcall"
 logger = logging.getLogger(LOGGER_NAME)
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+# Bounded, because this lives in a long-running process and an unbounded log of every call
+# a Lambda ever served is a memory leak with a slow fuse. A pack run is around thirty calls,
+# so this holds the last sixty or so runs and forgets the rest.
+RECENT_LIMIT = 2000
+
+_recent: deque[dict[str, Any]] = deque(maxlen=RECENT_LIMIT)
 
 
 def _plain(value: Any) -> Any:
@@ -126,7 +140,25 @@ def _elapsed(started: float) -> float:
 def _emit(**line: Any) -> None:
     # separators without spaces so the line is compact in CloudWatch, sort_keys off so the
     # seven fields stay in the order a human reads them.
-    logger.info(json.dumps(line, default=str, separators=(",", ":")))
+    text = json.dumps(line, default=str, separators=(",", ":"))
+    # Round-tripped rather than buffered as-is, so the buffer holds what a reader of the log
+    # would get and not what the emitter happened to have in hand. A datetime serialised by
+    # ``default=str`` comes back as the string CloudWatch would have shown.
+    _recent.append(json.loads(text))
+    logger.info(text)
+
+
+def recent(run_id: str | None = None) -> list[dict[str, Any]]:
+    """Every line this process has emitted, oldest first, optionally one run's."""
+    lines = list(_recent)
+    if run_id is None:
+        return lines
+    return [line for line in lines if line.get("run_id") == run_id]
+
+
+def forget() -> None:
+    """Drop the buffer. For harnesses that want one seed's calls and not the last seed's."""
+    _recent.clear()
 
 
 def configure(stream: Any = None, level: int = logging.INFO) -> logging.Handler:

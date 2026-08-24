@@ -1,4 +1,4 @@
-"""The MCP server. Four read tools, one endpoint, no session state.
+"""The MCP server. Four read tools and one write, one endpoint, no session state.
 
 Run it locally from the repository root:
 
@@ -57,6 +57,12 @@ projection_confidence with a reason, and a low-confidence projection is reported
 reason attached rather than acted on. get_time_summary returns weekly reporting coverage,
 and a week flagged firm_wide_gap is a filing artifact: exclude it from every run rate and
 projection, report it as a data note, and never describe it as a delivery slowdown.
+
+The four above read. publish_pack writes, and is the only tool here that does. Call it once
+a pack has been built, to archive that run's workbook and deck: it mints a presigned upload
+URL per file, and a second call with finalize checks the uploads arrived and writes the
+run's tool-call log and ledger entry beside them. It never reads business figures and is
+not part of any analysis.
 """.strip()
 
 

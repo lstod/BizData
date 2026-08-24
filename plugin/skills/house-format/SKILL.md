@@ -21,6 +21,12 @@ delivery-review-YYYY-MM.pptx      eight slides
 Build the workbook first, then the deck **from the same `pack.json`**. The deck never contains
 a number that is not in the workbook.
 
+Those are the names on disk and in the S3 archive, where the run id is already in the path.
+Google Drive is flat and has no path to carry it, so the copies saved there — and only those —
+append it: `engagement-book-YYYY-MM-<run_id>.xlsx`. That is the one extension this format
+permits, it is described in `assemble-delivery-pack`, and it exists so the same two files stay
+findable from either side.
+
 The whole point of this skill is that the format does not vary. If a run cannot produce these
 artifacts to this format, it says so and stops. It does not produce something close.
 

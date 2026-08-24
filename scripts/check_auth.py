@@ -19,6 +19,12 @@ The discovery chain is checked too, because it is what step 4 left open. A clien
 token has to be told where to authenticate, and that answer is carried in a WWW-Authenticate
 header pointing at RFC 9728 metadata. If that chain is broken the connector cannot start a
 flow at all, and the symptom looks like a server fault rather than a discovery one.
+
+Since step 9 the write tool is checked here as well, and only as far as minting: a
+``publish_pack`` call without ``finalize`` returns URLs and writes nothing, which proves the
+one write path in the system is behind the same token without leaving an object in the
+archive of record every time the auth chain is checked. scripts/check_archive.py is the one
+that spends objects.
 """
 
 from __future__ import annotations
@@ -252,7 +258,13 @@ def main(argv: list[str] | None = None) -> int:
     status, _, body = post_mcp(args.endpoint, "tools/list", token=token)
     payload = json.loads(body or b"{}")
     tools = payload.get("result", {}).get("tools", [])
-    checks.add("a valid token is accepted", status == 200 and len(tools) == 4, f"HTTP {status}, {len(tools)} tools")
+    names = {t.get("name") for t in tools}
+    checks.add("a valid token is accepted", status == 200 and len(tools) == 5, f"HTTP {status}, {len(tools)} tools")
+    checks.add(
+        "the deployed surface is the four read tools and publish_pack",
+        names == {"list_engagements", "get_engagement_burn", "get_time_summary", "get_financials", "publish_pack"},
+        ", ".join(sorted(str(n) for n in names)),
+    )
 
     check_deployment_is_current(payload, checks)
 
@@ -270,6 +282,44 @@ def main(argv: list[str] | None = None) -> int:
         "an authenticated tool call reaches Aurora",
         status == 200 and structured.get("total_count") == 18,
         f"HTTP {status}, total_count={structured.get('total_count')}",
+    )
+
+    # The write tool, reached with the same token and the same scope. finalize is left off
+    # deliberately: phase one mints URLs and writes nothing, so this proves the only write
+    # path in the system is authenticated and reachable without putting an object in the
+    # archive of record every time somebody checks the auth chain. What the URLs actually do
+    # is scripts/check_archive.py.
+    status, _, body = post_mcp(
+        args.endpoint,
+        "tools/call",
+        token=token,
+        params={
+            "name": "publish_pack",
+            "arguments": {
+                "run_id": "check-auth",
+                "period": "2026-08",
+                "artifacts": ["engagement-book-2026-08.xlsx"],
+            },
+        },
+    )
+    minted = json.loads(body or b"{}").get("result", {}).get("structuredContent", {})
+    uploads = minted.get("uploads", [])
+    checks.add(
+        "the write tool is reachable with the same token",
+        status == 200 and minted.get("phase") == "prepared" and len(uploads) == 1,
+        f"HTTP {status}, phase={minted.get('phase')}",
+    )
+    checks.add(
+        "and mints an https url scoped to this run's own key",
+        bool(uploads)
+        and str(uploads[0].get("url", "")).startswith("https://")
+        and uploads[0].get("key") == "runs/check-auth/engagement-book-2026-08.xlsx",
+        str(uploads[0].get("key")) if uploads else "no url minted",
+    )
+    checks.add(
+        "and phase one wrote nothing",
+        not minted.get("archived") and minted.get("ledger_key") is None,
+        "no archived objects",
     )
 
     status, _, _ = post_mcp(args.endpoint, "tools/list", token=tamper(token))

@@ -6,10 +6,14 @@
     scripts/check_tools.py --no-reseed      whatever is loaded now
 
 The SQL checks in db/checks/ assert things about the data. This asserts things about the
-tools: that all four answer, that their responses validate against the output schemas they
-publish, that the mess cases surface through the tool surface rather than only in a query,
-that nothing exceeds the Data API's 1 MiB response cap, and that every call leaves exactly
-one complete line in the tool-call log.
+tools: that all four read tools answer, that their responses validate against the output
+schemas they publish, that the mess cases surface through the tool surface rather than only
+in a query, that nothing exceeds the Data API's 1 MiB response cap, and that every call
+leaves exactly one complete line in the tool-call log.
+
+The fifth tool, ``publish_pack``, is checked here only for the shape it publishes — the read
+surface is still four, and asserting that is this file's job. What it does with what it
+publishes is scripts/check_publish.py.
 
 It runs through ``Client(mcp)``, which connects to the server object in memory — no port,
 no transport, no uvicorn. That is the same code path a real client takes from
@@ -46,6 +50,7 @@ from mcp import Client  # noqa: E402
 
 from server import db, toollog  # noqa: E402
 from server.app import mcp  # noqa: E402
+from server.tools import READ_TOOLS, WRITE_TOOLS  # noqa: E402
 from server.tools.get_time_summary import GROUPINGS  # noqa: E402
 
 FIXTURE_SEEDS = (42, 43, *range(9001, 9016))
@@ -66,6 +71,10 @@ EXPECTED_PARAMS = {
     "get_time_summary": {"engagement_ids", "period_start", "period_end", "max_rows"},
     "get_time_summary_quality": {"engagement_ids", "period_start", "period_end"},
     "get_time_summary_completeness": {"period_start", "period_end"},
+    # publish_pack's, and the only file here that binds nothing. It asks the database one
+    # question — which scoring model is live — so the ledger entry it archives records the
+    # model the pack was built under.
+    "scoring_model_version": set(),
 }
 
 
@@ -250,11 +259,26 @@ def check_published_schemas(tools: Any, checks: Checks) -> dict[str, dict[str, A
         "get_engagement_burn": {"engagement_id", "as_of_date", "run_id"},
         "get_time_summary": {"period_start", "period_end", "group_by", "engagement_ids", "run_id"},
         "get_financials": {"engagement_id", "period", "run_id"},
+        "publish_pack": {"run_id", "period", "artifacts", "finalize"},
     }
     published = {t.name: t for t in tools.tools}
 
+    # The cap is on the read surface, so it is asserted on the read surface. Step 9 added a
+    # fifth tool and the interesting condition is not "how many are there" but "did an action
+    # get counted as a read", which the two assertions below can tell apart and a single
+    # count could not.
     checks.add(
         "tools/list publishes exactly the four read tools",
+        {t.__name__ for t in READ_TOOLS} == set(published) - {"publish_pack"},
+        ", ".join(sorted(set(published) - {"publish_pack"})),
+    )
+    checks.add(
+        "and one write tool, kept out of the read surface",
+        {t.__name__ for t in WRITE_TOOLS} == {"publish_pack"} and "publish_pack" in published,
+        ", ".join(sorted(t.__name__ for t in WRITE_TOOLS)),
+    )
+    checks.add(
+        "tools/list publishes nothing beyond those five",
         set(published) == set(expected_inputs),
         ", ".join(sorted(published)),
     )
@@ -271,10 +295,16 @@ def check_published_schemas(tools: Any, checks: Checks) -> dict[str, dict[str, A
             got == wanted,
             f"{sorted(got)}",
         )
+        # run_id is optional on every tool that reads and required on the one that writes,
+        # and the inversion is the point rather than an inconsistency: a read with no run id
+        # is an ungrouped call, which is allowed and visibly ungrouped. A write with no run
+        # id has no folder to write to.
+        required = tool.input_schema.get("required", [])
+        must_have_run_id = name in {t.__name__ for t in WRITE_TOOLS}
         checks.add(
-            f"{name}: run_id is optional",
-            "run_id" not in tool.input_schema.get("required", []),
-            f"required: {sorted(tool.input_schema.get('required', []))}",
+            f"{name}: run_id is {'required' if must_have_run_id else 'optional'}",
+            ("run_id" in required) == must_have_run_id,
+            f"required: {sorted(required)}",
         )
         checks.add(
             f"{name}: publishes an output schema",
