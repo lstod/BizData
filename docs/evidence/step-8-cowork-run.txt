@@ -1,0 +1,145 @@
+======================================================================
+step 8 -- the Cowork run, and the diff that proves where the flags came from
+deployed f34e831, seed 42 on Aurora, all three Skills uploaded zipped
+======================================================================
+
+The prompt named no flag, no threshold, no mess case and no engagement id:
+
+    Produce the August 2026 delivery review from the BizData connector. Use the
+    delivery review skills. Give me the workbook and the deck, and tell me what
+    you found.
+
+Step 7's run, with scope-escalation absent, wrote ten exception rows on criteria
+it invented. This is the same run with the Skill present.
+
+----------------------------------------------------------------------
+1. the examined set -- six triggers, not four
+----------------------------------------------------------------------
+
+  harness examined  10: [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+  run examined      10: [2, 5, 8, 9, 12, 15, 19, 20, 22, 25]
+  identical: True
+
+  The run wrote out all six lists before making a detail call:
+
+    A burn > 70              8, 9, 15, 19, 25
+    B not green              5, 8, 9, 20, 22
+    C concentration > 70     12
+    D ended in period        2
+    E silent >= 14 days      25        <- new at step 8
+    F margin < 15            5         <- new at step 8
+
+  E and F are the two that were missing. Without them engagement 25 is
+  examined here only because burn happens to exceed 70 on this seed, and
+  engagement 5 only because its band is not green. On six of the seventeen
+  fixture seeds neither of those held and both engagements were invisible.
+
+----------------------------------------------------------------------
+2. the diff -- the four columns classify.py owns
+----------------------------------------------------------------------
+
+  Exceptions tab header: engagement_id, flag, triggers, situation, cause, recommended_action, decision_owner
+  run 7 rows, harness 7 rows
+  same engagement ids: True -> [5, 8, 9, 12, 20, 22, 25]
+
+  mismatches across engagement_id, flag, triggers, situation: 0
+
+  eid  flag          triggers
+  ---  ------------  ------------------------------------------------------
+    5  NEEDS REVIEW  fixed fee below the margin floor; margin failing, burn healthy
+    8  RED           projected overrun, high confidence; burn above 90% with duration remaining
+    9  RED           projected overrun, high confidence; burn above 90% with duration remaining
+   12  NEEDS REVIEW  concentration above median fee
+   20  RED           projected overrun, high confidence
+   22  RED           projected overrun, high confidence
+   25  RED           no time logged for 14 days
+
+  Not a claim that the run was careful. The situation strings are byte-identical
+  to the ones classify.py wrote, which is only possible if the script ran.
+
+----------------------------------------------------------------------
+3. the two columns the agent owns, which should and do differ
+----------------------------------------------------------------------
+
+  [5] NEEDS REVIEW
+  cause:  not determinable from available data
+  action: Take the fixed-fee position to a scope and pricing conversation with the client before the 40 remaining contract days are used: decide whether remaining scope is delivered at the agreed fee, re-priced, or reduced. Engagement lead to decide, with the partner on the pricing question.
+
+  [8] RED
+  cause:  not determinable from available data
+  action: Hours are 316.4 past the 1,020.0 hour ceiling with 254 contract days remaining. Decide whether to stop work at the ceiling or raise a change order for the remaining scope, and confirm the client position on the hours already delivered past it. Engagement lead to decide.
+
+  [9] RED
+  cause:  not determinable from available data
+  action: Hours are 191.2 past the 780.0 hour ceiling with 71 contract days remaining. Decide whether to raise a change order or close out at the ceiling. Engagement lead to decide.
+
+  [12] NEEDS REVIEW
+  cause:  not determinable from available data
+  action: None. This trigger is a reason to look, not a decision to take.
+
+  [20] RED
+  cause:  not determinable from available data
+  action: Projection at the current run rate exceeds the 4,840.0 hour ceiling by 30.8% with 228 contract days remaining. Decide whether the run rate is reduced, the scope trimmed, or a change order raised now rather than at the ceiling. Engagement lead to decide.
+
+  [22] RED
+  cause:  not determinable from available data
+  action: Projection at the current run rate exceeds the 1,520.0 hour ceiling by 11.1% with 147 contract days remaining. Decide whether to re-plan the remaining scope or raise a change order. Engagement lead to decide.
+
+  [25] RED
+  cause:  not determinable from available data
+  action: Confirm with the delivery team whether work is ongoing and timesheets are outstanding, or whether delivery has in fact stopped; the absence of entries does not distinguish the two. Once known, decide whether the engagement status is changed. Engagement lead to decide.
+
+
+----------------------------------------------------------------------
+4. the four things a helpful model does that would undo this
+----------------------------------------------------------------------
+
+  engagement 12's refusal left exactly as written  True
+  every cause declines to invent one               True
+  decision owner is the lead, never the agent      True
+  re-baselining language                           none
+  completion language                              none
+
+  The third one is the one worth reading closely. Engagements 8 and 9 are both
+  past their ceilings, and the recommendation on each is to "raise a change
+  order" -- not to raise the ceiling. That is the distinction the rule exists
+  for, and the model drew it unprompted.
+
+  Engagement 25 is the other. Twenty-four days of silence, and the action reads:
+  "Confirm with the delivery team whether work is ongoing and timesheets are
+  outstanding, or whether delivery has in fact stopped; the absence of entries
+  does not distinguish the two." Absent data treated as absent data.
+
+----------------------------------------------------------------------
+5. the deck, with the RED cap binding for the first time in a real run
+----------------------------------------------------------------------
+
+  1. Delivery and margin review
+  2. Portfolio summary
+  3. Margin by client
+  4. Engagements at risk
+  5. RED · Regulatory Reporting Programme
+  6. RED · Pricing Modernisation
+  7. RED · Inventory Implementation
+  8. Data quality and caveats
+
+  8 slides, 3 RED detail slides, last is 'Data quality and caveats'
+
+  Five engagements are RED and MAX_RED_SLIDES is 3, so 22 and 25 carry rows on
+  Engagements at risk and on the Exceptions tab but get no slide. The run said
+  so rather than letting it pass unremarked. check_format.py asserts this
+  synthetically now; this is the real one.
+
+----------------------------------------------------------------------
+6. what the run found
+----------------------------------------------------------------------
+
+  Nothing wrong. Step 6's run substituted its own builder, step 7's substituted
+  its own judgment, and this one substituted nothing -- it ran the script, filled
+  the two fields left for it, and left the refusal alone.
+
+  The one thing worth recording is that it volunteered the deck's RED cap and
+  the engagement examined and not flagged (engagement 2, contract ended in the
+  period, burn 29.1%, margin 83.2%, nothing found) as results rather than
+  omissions. An engagement examined and cleared is a finding, and the run
+  reported it as one.
