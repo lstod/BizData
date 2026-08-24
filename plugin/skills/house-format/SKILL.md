@@ -46,6 +46,11 @@ dropped a column and the run reported success. The rest of this document is the 
 those scripts implement, written down so the format is reviewable and so a discrepancy is
 findable. It is not a set of instructions for rebuilding them.
 
+**If a skill this one references is not available, stop and say so.** Do not supply its judgment
+yourself. Same rule, stated separately because the one above names scripts and a missing skill is
+not a script — which is exactly how it failed: with `scope-escalation` absent, a run supplied its
+own RED and NEEDS REVIEW criteria and every other guard passed.
+
 ## The workbook — five tabs, in this order
 
 | Tab | Contents |
@@ -53,7 +58,7 @@ findable. It is not a set of instructions for rebuilding them.
 | `Summary` | Portfolio totals. Every total a formula over `Engagements`, never a pasted value, plus the figures the portfolio block measured |
 | `Engagements` | One row per active engagement, carrying its `engagement_id`, through to margin and projected overrun |
 | `Time Detail` | `get_time_summary` grouped by `engagement,week`, with each week's reporting coverage on the row |
-| `Exceptions` | Only engagements flagged by `scope-escalation`, with reason, recommended action and decision owner |
+| `Exceptions` | Only engagements flagged by `scope-escalation`. Seven columns: `engagement_id`, `flag`, `triggers`, `situation`, `cause`, `recommended_action`, `decision_owner` |
 | `Data Quality` | Late entries, nulls, suspected duplicates, weekly coverage, and any week below the floor |
 
 ## Live formulas, not computed constants
@@ -164,5 +169,5 @@ The firm did not stop delivering. The timesheets are not in.
 
 ## Before saying the pack is done
 
-Work through `assets/self-check.md` against the files on disk. Eighteen questions, all of them
-things that have gone wrong in a real run, and answering them takes about a minute.
+Work through `assets/self-check.md` against the files on disk. Twenty-four questions, all of
+them things that have gone wrong in a real run, and answering them takes about a minute.

@@ -1,0 +1,92 @@
+======================================================================
+step 8 -- local Postgres vs the RDS Data API, seed 42
+generated 2026-08-24T01:29:18Z, commit 9ff1ff7+wt
+======================================================================
+
+All four harnesses, seed 42, run once on each backend. 340 assertions a side.
+
+  check_tools       213
+  check_pack         32
+  check_format       46   (44 at step 7, plus the RED slide cap)
+  check_escalation   49   (new at step 8)
+
+----------------------------------------------------------------------
+1. the diff, whole run
+----------------------------------------------------------------------
+
+$ diff local.txt aurora.txt
+
+1a2
+> Loading cached SSO token for bizdata
+215c216
+< 211  t   run_id: the server mints one when the caller omits it                      req-9a70986b594b, echoed in the response
+---
+> 211  t   run_id: the server mints one when the caller omits it                      req-6d05f4341d17, echoed in the response
+221a223
+> Loading cached SSO token for bizdata
+236c238
+<  12  t   build_workbook ran and wrote the workbook                                  /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-pack-1qq276lk/engagement-book-2026-08-s
+---
+>  12  t   build_workbook ran and wrote the workbook                                  /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-pack-w362iezq/engagement-book-2026-08-s
+260a263
+> Loading cached SSO token for bizdata
+274,275c277,278
+<  11  t   build_workbook ran and wrote its artifact                                  /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-format-ld8p_pnc/engagement-book-2026-08-seed-42
+<  12  t   build_deck ran and wrote its artifact                                      /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-format-ld8p_pnc/delivery-review-2026-08-seed-42
+---
+>  11  t   build_workbook ran and wrote its artifact                                  /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-format-1xp9boax/engagement-book-2026-08-seed-42
+>  12  t   build_deck ran and wrote its artifact                                      /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-format-1xp9boax/delivery-review-2026-08-seed-42
+313a317
+> Loading cached SSO token for bizdata
+334,335c338,339
+<  18  t   classify.py ran and wrote the exceptions                                   /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-0risukqf/pack-42-classified.
+<  19  t   the flagged engagements reach a real workbook                              /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-0risukqf/engagement-book-202
+---
+>  18  t   classify.py ran and wrote the exceptions                                   /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-ousakl26/pack-42-classified.
+>  19  t   the flagged engagements reach a real workbook                              /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-ousakl26/engagement-book-202
+365c369
+<  49  t   classify.py refuses a pack with no financials key                          error: /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-0risukqf/bad-classify
+---
+>  49  t   classify.py refuses a pack with no financials key                          error: /var/folders/54/bbz_qdx105s0bmntjx6rnd0h0000gn/T/bizdata-escalation-ousakl26/bad-classify
+
+368 lines local, 372 lines Aurora, 32 lines of diff.
+Every one is a randomly minted run_id, an SSO token log line, or an mkdtemp path.
+No figure differs, and no assertion differs.
+
+----------------------------------------------------------------------
+2. the sharper claim: the flags themselves
+----------------------------------------------------------------------
+
+Step 5's run diffed to a run_id. Step 6's diffed to nothing. This one has a
+narrower thing to prove: scope-escalation reads tool output and emits judgments,
+so the question is whether the two backends produce the same judgments, not
+merely the same numbers.
+
+  local  7 exceptions
+  aurora 7 exceptions
+  identical, field for field: True
+
+  eid  flag          triggers
+  ---  ------------  ----------------------------------------------------------
+    5  NEEDS REVIEW  fixed fee below the margin floor; margin failing, burn healthy
+    8  RED           projected overrun, high confidence; burn above 90% with duration remaining
+    9  RED           projected overrun, high confidence; burn above 90% with duration remaining
+   12  NEEDS REVIEW  concentration above median fee
+   20  RED           projected overrun, high confidence
+   22  RED           projected overrun, high confidence
+   25  RED           no time logged for 14 days
+
+  Mess cases, as the Done-when names them:
+    case 4  engagement  5  NEEDS REVIEW  -- the contradiction, unresolved
+    case 8  engagement 12  NEEDS REVIEW  -- continuity, no recommendation
+    case 3  engagement 25  RED           -- silent, not assumed complete
+
+----------------------------------------------------------------------
+3. what did not need doing
+----------------------------------------------------------------------
+
+No view changed at step 8, so Aurora needed no --views-only push and no reseed.
+The two new triage columns are a projection in db/sql/list_engagements.sql over
+engagement_burn_v1, which both databases already held. margin_ratio there is the
+same column engagement_financials_v1 projects, so the triage margin and
+get_financials' margin are one number by construction rather than by agreement.

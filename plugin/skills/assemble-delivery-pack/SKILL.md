@@ -54,10 +54,10 @@ says.
 
 **3. Apply the coverage rule.** See the next section. It changes how everything below is reported.
 
-**4. Choose what to examine. There are four triggers, and you must write out all four lists before
+**4. Choose what to examine. There are six triggers, and you must write out all six lists before
 calling anything.**
 
-Go through the `list_engagements` rows once and collect these four sets of `engagement_id`. Write
+Go through the `list_engagements` rows once and collect these six sets of `engagement_id`. Write
 each one out, by name, even when it is empty:
 
 ```
@@ -65,20 +65,30 @@ A  burn_pct > 70
 B  health_band is not "green"
 C  person_concentration_pct > 70
 D  end_date on or before period_end
+E  days_since_last_entry >= 14
+F  margin_pct < 15
 ```
 
-Then examine the **union** of A, B, C and D: `get_engagement_burn` and `get_financials`, once each,
-for every id in it.
+Then examine the **union** of A, B, C, D, E and F: `get_engagement_burn` and `get_financials`,
+once each, for every id in it.
 
 **Do not shortcut this to A and B.** That is the natural filter, it is the one most delivery
 reviews use, and it is wrong. An engagement can be comfortably inside its ceiling and in the green
-band while one person is 85% of its delivery, or while its contract has already ended. Burn does
-not express either. C and D exist because those two engagements are invisible to a burn threshold,
-and skipping the C list is the single most likely way this pack misses something real.
+band while one person is 85% of its delivery, while its contract has already ended, while nobody
+has logged time against it for a month, or while it loses money on every hour. Burn expresses none
+of those four.
 
-C is the one to double-check. It is the newest of the four and the easiest to forget, and
-`person_concentration_pct` is on every `list_engagements` row precisely so that you never need a
-tool call to evaluate it.
+C through F all exist for the same reason and each was added after a run missed something real. C
+and D came from step 6, where a burn-threshold fan-out never examined the concentrated engagement
+or the one that had already ended. E and F came from step 8, where the escalation policy could not
+flag a silent engagement or a fixed-fee engagement under water, because the detail call that would
+have proved it was the call this filter had declined to make. On six of the seventeen fixture seeds
+those two engagements sat in the green band, under 70% burn, with a live contract, and were
+invisible.
+
+Every one of these six is a column on the `list_engagements` row precisely so that you never need
+a tool call to evaluate it. **The filter can only fire on what the triage row carries**, which is
+why the row carries them.
 
 **5. Everything else gets its summary figures and nothing more.** Detail you will not use is still
 detail you paid for. Do not call `get_engagement_burn` for all eighteen engagements to be thorough.
@@ -86,6 +96,14 @@ detail you paid for. Do not call `get_engagement_burn` for all eighteen engageme
 **6. Apply `scope-escalation`** to the full set before writing anything. It decides what is RED,
 what is NEEDS REVIEW, and what goes in the `Exceptions` tab. This skill decides what to look at;
 that one decides what to say about it.
+
+Its bundled `classify.py` evaluates the triggers and writes the `exceptions` array into
+`pack.json`. Run it, then fill in `cause` and `recommended_action` on each row as that skill
+directs. Do not set a flag yourself, and do not add or remove a row.
+
+```bash
+python scripts/classify.py pack.json --out pack.json
+```
 
 **7. Build the workbook, then the deck**, both with their bundled scripts and in that order.
 See *Producing the pack*. The format of both is `house-format`'s: the five tabs, the live
@@ -149,13 +167,18 @@ workbook.
 
 ## Producing the pack
 
-Collect the raw tool responses into one JSON file, unmodified, then run the two bundled scripts
+Collect the raw tool responses into one JSON file, unmodified, then run the three bundled scripts
 in this order:
 
 ```bash
+python scripts/classify.py       pack.json --out pack.json
 python scripts/build_workbook.py pack.json --out engagement-book-2026-08.xlsx
 python scripts/build_deck.py     pack.json --out delivery-review-2026-08.pptx
 ```
+
+`classify.py` first, and the two judgment fields filled in before the workbook is built. The
+builders copy the `Exceptions` rows as they find them, so anything still empty at that point is
+empty in the file a partner opens.
 
 The workbook first, always. The deck may not contain a number that is not in the book, and
 building it second is what makes that checkable rather than merely intended.
@@ -163,9 +186,16 @@ building it second is what makes that checkable rather than merely intended.
 The scripts do the layout. Neither computes anything, which is what keeps the "every figure came
 from a tool" rule true through to the files on disk.
 
-If either script is missing from the environment, **stop and say so**. Do not write a
+If any of the three scripts is missing from the environment, **stop and say so**. Do not write a
 replacement: a hand-rolled builder produces a different layout every month, and it has already
 silently dropped a column once.
+
+**If a skill this one references is not available, stop and say so.** Do not supply its judgment
+yourself. This is the same rule and it is stated separately because the first version named
+scripts, and a missing skill walked straight through it: with `scope-escalation` absent, a run
+wrote ten exception rows on criteria it invented rather than halting. It declared them, which was
+the good version of the behaviour, and they were still the only content in the pack that traced to
+nothing.
 
 `pack.json` has this shape. Keys are exactly the field names the tools returned:
 
@@ -182,7 +212,8 @@ silently dropped a column once.
     {
       "engagement_id": 9,
       "flag": "RED",
-      "situation": "one sentence, figures only",
+      "triggers": "which rules fired, written by classify.py",
+      "situation": "one sentence, figures only, written by classify.py",
       "cause": "or: not determinable from available data",
       "recommended_action": "the decision needed, and from whom",
       "decision_owner": "engagement lead"
@@ -193,8 +224,9 @@ silently dropped a column once.
 
 `burn` and `financials` hold only the engagements chosen at step 4. `portfolio` is copied whole
 from the first `list_engagements` response and is required — the deck refuses to build without
-it rather than adding the rows up itself. `exceptions` comes from `scope-escalation`; an empty
-list is valid and produces a tab saying no engagement was flagged, which is itself a finding.
+it rather than adding the rows up itself. `exceptions` comes from `scope-escalation`'s
+`classify.py`, with `cause` and `recommended_action` filled in afterwards; an empty list is valid
+and produces a tab saying no engagement was flagged, which is itself a finding.
 
 The scripts write five tabs in order — `Summary`, `Engagements`, `Time Detail`, `Exceptions`,
 `Data Quality` — and the deck's slides in `house-format`'s order, reporting the gap week on the

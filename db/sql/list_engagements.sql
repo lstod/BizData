@@ -12,6 +12,17 @@
 -- is not a triage row. Both columns come off engagement_burn_v1, which already computed
 -- them for get_engagement_burn, so this costs a projection and no new work.
 --
+-- days_since_last_entry and margin_pct join them at step 8, for the third and fourth
+-- instances of the same problem. scope-escalation flags an active engagement that has not
+-- logged time in fourteen days, and a fixed-fee engagement under water beside a healthy
+-- burn — mess cases 3 and 4. Both of those engagements can sit in the green band under 70%
+-- burn with one team and a live contract, clearing every examine trigger, and on six of the
+-- seventeen fixture seeds they did: the detail call that would have exposed them was the
+-- call the filter had already declined to make. A policy can only fire on what triage
+-- carries. Both come off engagement_burn_v1 as well, and margin_ratio there is the same
+-- column engagement_financials_v1 projects, so the triage margin and get_financials'
+-- margin cannot disagree.
+--
 -- Paging is keyset on engagement_id rather than an offset. total_count is counted over the
 -- whole filtered set rather than what is left after the cursor, so it does not shrink as
 -- the caller pages — assemble-delivery-pack's rule is to page until returned_count sums to
@@ -55,6 +66,8 @@ filtered as (
         b.days_remaining,
         b.hours_to_date,
         round(100 * b.burn_ratio, 1)            as burn_pct,
+        round(100 * b.margin_ratio, 1)          as margin_pct,
+        round(b.days_since_last_entry)::int     as days_since_last_entry,
         round(100 * b.person_concentration_ratio, 1) as person_concentration_pct,
         b.people_count,
         h.health_score,

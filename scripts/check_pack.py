@@ -62,6 +62,8 @@ TABS = ["Summary", "Engagements", "Time Detail", "Exceptions", "Data Quality"]
 # so that the check and the prose cannot drift without somebody noticing.
 CONCENTRATION_TRIGGER = 70
 BURN_TRIGGER = 70
+SILENT_DAYS_TRIGGER = 14
+MARGIN_TRIGGER = 15
 
 # Words that turn a filing gap into a delivery finding. Matched on word boundaries, so
 # "install" does not trip "stall" and a client called Fernhollow does not trip "fell".
@@ -74,18 +76,27 @@ BANNED_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in BANNED) + r")\b",
 
 
 def examine(engagement: dict[str, Any], period_end: str) -> bool:
-    """The four triggers. Any one of them is enough.
+    """The six triggers. Any one of them is enough.
 
-    The last two are step 6's addition and the reason it exists: an engagement can be inside
-    its ceiling and in the green band while one person is 85% of its hours, or while its
-    contract has already ended.
+    C and D are step 6's addition and the reason it exists: an engagement can be inside its
+    ceiling and in the green band while one person is 85% of its hours, or while its contract
+    has already ended.
+
+    E and F are step 8's, for the same reason one step further on. scope-escalation flags a
+    silent engagement and a fixed-fee engagement under water, and on six of the seventeen
+    fixture seeds neither was examined — so neither could be flagged, because the field that
+    proves it comes back from the call this filter declined to make.
     """
     concentration = engagement.get("person_concentration_pct")
+    silent_days = engagement.get("days_since_last_entry")
+    margin = engagement.get("margin_pct")
     return (
         engagement["burn_pct"] > BURN_TRIGGER
         or engagement.get("health_band") != "green"
         or (concentration is not None and concentration > CONCENTRATION_TRIGGER)
         or str(engagement["end_date"]) <= period_end
+        or (silent_days is not None and silent_days >= SILENT_DAYS_TRIGGER)
+        or (margin is not None and margin < MARGIN_TRIGGER)
     )
 
 
@@ -396,6 +407,7 @@ def check_exceptions_populate(pack: dict[str, Any], workdir: Path, checks: Check
     with_exception["exceptions"] = [{
         "engagement_id": eid,
         "flag": "RED",
+        "triggers": "placeholder trigger",
         "situation": "placeholder from scripts/check_pack.py",
         "cause": "not determinable from available data",
         "recommended_action": "none, this is a harness fixture",

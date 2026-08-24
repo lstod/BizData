@@ -1,0 +1,97 @@
+======================================================================
+step 8 -- scope-escalation, all four harnesses, all seventeen seeds
+generated 2026-08-24T01:19:51Z, commit 9ff1ff7+wt
+======================================================================
+
+----------------------------------------------------------------------
+scripts/check_tools.py
+----------------------------------------------------------------------
+seed 42: 213 of 213 assertions passed
+seed 43: 213 of 213 assertions passed
+seed 9001: 213 of 213 assertions passed
+seed 9002: 213 of 213 assertions passed
+seed 9003: 213 of 213 assertions passed
+seed 9004: 213 of 213 assertions passed
+seed 9005: 213 of 213 assertions passed
+seed 9006: 213 of 213 assertions passed
+seed 9007: 213 of 213 assertions passed
+seed 9008: 213 of 213 assertions passed
+seed 9009: 213 of 213 assertions passed
+seed 9010: 213 of 213 assertions passed
+seed 9011: 213 of 213 assertions passed
+seed 9012: 213 of 213 assertions passed
+seed 9013: 213 of 213 assertions passed
+seed 9014: 213 of 213 assertions passed
+seed 9015: 213 of 213 assertions passed
+
+all seeds pass
+
+----------------------------------------------------------------------
+scripts/check_pack.py
+----------------------------------------------------------------------
+seed 42: 32 of 32 assertions passed
+seed 43: 32 of 32 assertions passed
+seed 9001: 32 of 32 assertions passed
+seed 9002: 32 of 32 assertions passed
+seed 9003: 32 of 32 assertions passed
+seed 9004: 32 of 32 assertions passed
+seed 9005: 32 of 32 assertions passed
+seed 9006: 32 of 32 assertions passed
+seed 9007: 32 of 32 assertions passed
+seed 9008: 32 of 32 assertions passed
+seed 9009: 32 of 32 assertions passed
+seed 9010: 32 of 32 assertions passed
+seed 9011: 32 of 32 assertions passed
+seed 9012: 32 of 32 assertions passed
+seed 9013: 32 of 32 assertions passed
+seed 9014: 32 of 32 assertions passed
+seed 9015: 32 of 32 assertions passed
+
+all seeds pass
+
+----------------------------------------------------------------------
+scripts/check_format.py
+----------------------------------------------------------------------
+seed 42: 46 of 46 assertions passed
+seed 43: 46 of 46 assertions passed
+seed 9001: 46 of 46 assertions passed
+seed 9002: 46 of 46 assertions passed
+seed 9003: 46 of 46 assertions passed
+seed 9004: 46 of 46 assertions passed
+seed 9005: 46 of 46 assertions passed
+seed 9006: 46 of 46 assertions passed
+seed 9007: 46 of 46 assertions passed
+seed 9008: 46 of 46 assertions passed
+seed 9009: 46 of 46 assertions passed
+seed 9010: 46 of 46 assertions passed
+seed 9011: 46 of 46 assertions passed
+seed 9012: 46 of 46 assertions passed
+seed 9013: 46 of 46 assertions passed
+seed 9014: 46 of 46 assertions passed
+seed 9015: 46 of 46 assertions passed
+
+all seeds pass
+
+----------------------------------------------------------------------
+scripts/check_escalation.py
+----------------------------------------------------------------------
+seed 42: 49 of 49 assertions passed
+seed 43: 49 of 49 assertions passed
+seed 9001: 49 of 49 assertions passed
+seed 9002: 49 of 49 assertions passed
+seed 9003: 49 of 49 assertions passed
+seed 9004: 49 of 49 assertions passed
+seed 9005: 49 of 49 assertions passed
+seed 9006: 49 of 49 assertions passed
+seed 9007: 49 of 49 assertions passed
+seed 9008: 49 of 49 assertions passed
+seed 9009: 48 of 48 assertions passed
+seed 9010: 49 of 49 assertions passed
+seed 9011: 49 of 49 assertions passed
+seed 9012: 49 of 49 assertions passed
+seed 9013: 49 of 49 assertions passed
+seed 9014: 49 of 49 assertions passed
+seed 9015: 49 of 49 assertions passed
+
+all seeds pass
+

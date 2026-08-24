@@ -100,8 +100,12 @@ TIME_DETAIL_COLUMNS = (
     "pct_active_reporting", "firm_wide_gap",
 )
 
+# triggers is step 8's addition and is the column that makes the tab self-evidencing: it names
+# which rules fired, so a reader can re-derive the flag from the Engagements row beside it
+# rather than taking it on trust.
 EXCEPTION_COLUMNS = (
-    "engagement_id", "flag", "situation", "cause", "recommended_action", "decision_owner",
+    "engagement_id", "flag", "triggers", "situation", "cause", "recommended_action",
+    "decision_owner",
 )
 
 QUALITY_METRICS = (
@@ -514,7 +518,7 @@ def build_exceptions(ws: Worksheet, pack: dict[str, Any]) -> None:
         ws.cell(row=2, column=1, value="No engagement was flagged by scope-escalation this period.")
 
     ws.freeze_panes = "A2"
-    widths(ws, EXCEPTION_COLUMNS, wide={"situation", "cause", "recommended_action"})
+    widths(ws, EXCEPTION_COLUMNS, wide={"triggers", "situation", "cause", "recommended_action"})
 
 
 def build_data_quality(ws: Worksheet, pack: dict[str, Any]) -> None:

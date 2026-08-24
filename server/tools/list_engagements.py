@@ -11,6 +11,15 @@ is worth keeping because it was found rather than designed. A connector review f
 burn or band examined 8 of 18 engagements and missed mess case 8 entirely — 85% of an
 engagement's hours from one person, at 67% burn, in the green band. The filter was right and
 the row was too thin to express what it was filtering on.
+
+Step 8 added margin_pct and days_since_last_entry, and found it the same way. scope-escalation
+flags an active engagement silent for fourteen days and a fixed-fee engagement under water
+beside a healthy burn, and on six of the seventeen fixture seeds neither engagement was ever
+examined: both sat in the green band under 70% burn with a live contract and one team, so the
+detail call carrying the proof was the call triage had declined to make. Both columns come off
+engagement_burn_v1, which the query already reads, and margin_ratio there is the column
+engagement_financials_v1 projects — so the triage margin and get_financials' margin are the
+same number by construction rather than by agreement.
 """
 
 from __future__ import annotations
@@ -42,6 +51,21 @@ class Engagement(BaseModel):
     days_remaining: int = Field(description="Contract days left at the period end. Zero once ended.")
     hours_to_date: float
     burn_pct: float = Field(description="Hours to date against ceiling hours, 0 to 100 and beyond.")
+    margin_pct: float | None = Field(
+        default=None,
+        description=(
+            "Fee less cost over fee for fixed price, billable value less cost over billable "
+            "value for time and materials. The same figure get_financials returns, from the "
+            "same column. Null when a time and materials engagement has billed nothing."
+        ),
+    )
+    days_since_last_entry: int | None = Field(
+        default=None,
+        description=(
+            "Days between the last time entry and the period end. Counts from the start date "
+            "when nothing has ever been logged, so it is never null on a live engagement."
+        ),
+    )
     person_concentration_pct: float | None = Field(
         default=None,
         description=(
@@ -188,8 +212,10 @@ def list_engagements(
     engagement is the one that was in trouble.
 
     Triage from these rows rather than from burn alone. An engagement can be inside its
-    ceiling and in the green band while one person is 85% of its hours, or while its
-    contract ended part way through the period, and neither risk is visible in burn_pct.
+    ceiling and in the green band while one person is 85% of its hours, while its contract
+    ended part way through the period, while nobody has logged time against it for a month,
+    or while it loses money on every hour. None of those four is visible in burn_pct, and
+    each has its own column here so that the filter can fire without a detail call.
 
     Set include_portfolio on the first page to get portfolio totals and margin by client
     alongside the rows: blended margin, total hours, and movement against the prior month,

@@ -548,6 +548,70 @@ def check_clean_period(pack: dict[str, Any], workdir: Path, checks: Checks) -> N
     )
 
 
+def check_red_slide_cap(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
+    """More RED engagements than there are slides for them.
+
+    The format says eight slides and at most three RED slides, and until step 8 nothing
+    exercised the collision: gather() produced no exceptions, so every harness deck ran to
+    six and the variable middle was only ever seen in a Cowork run. Five RED rows here, which
+    no fixture seed is guaranteed to produce, so the cap is asserted rather than hoped for.
+
+    The engagements are real ones from this pack, so the slides have figures to render.
+    """
+    examined = sorted(int(eid) for eid in (pack.get("burn") or {}))[:5]
+    if len(examined) < 4:
+        checks.add(
+            "deck: the RED slide cap holds when more engagements are flagged than fit",
+            False,
+            f"only {len(examined)} examined engagements, need at least 4 to test the cap",
+        )
+        return
+
+    crowded = copy.deepcopy(pack)
+    crowded["exceptions"] = [
+        {
+            "engagement_id": eid,
+            "flag": "RED",
+            "triggers": "harness fixture: more RED rows than slides",
+            "situation": f"Engagement {eid} is a harness fixture for the RED slide cap.",
+            "cause": "not determinable from available data",
+            "recommended_action": "none, this is a harness fixture",
+            "decision_owner": "engagement lead",
+        }
+        for eid in examined
+    ]
+
+    path = workdir / "pack-crowded.json"
+    path.write_text(json.dumps(crowded, default=str, indent=2))
+    out = workdir / "deck-crowded.pptx"
+
+    result = subprocess.run(
+        [sys.executable, str(DECK_BUILDER), str(path), "--out", str(out)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not out.exists():
+        checks.add(
+            "deck: a period with more RED engagements than slides still builds",
+            False,
+            result.stderr.strip()[:110],
+        )
+        return
+
+    headings = [heading_of(s) for s in Presentation(out).slides]
+    red = [h for h in headings if h.startswith(RED_SECTION)]
+
+    checks.add(
+        "deck: the RED detail slides are capped at three however many are flagged",
+        len(red) == 3,
+        f"{len(examined)} flagged RED, {len(red)} slide(s) rendered",
+    )
+    checks.add(
+        "deck: the cap does not cost the caveats slide its place at the end",
+        headings[-1] == LAST_SLIDE and len(headings) == 8,
+        f"{len(headings)} slides, last is {headings[-1]!r}",
+    )
+
+
 def check_deck_refusals(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
     """The deck refuses a pack it cannot build honestly, rather than filling the gap.
 
@@ -657,6 +721,7 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks, workdir: 
 
     check_deck(deck, pack, wb, checks)
     check_clean_period(pack, workdir, checks)
+    check_red_slide_cap(pack, workdir, checks)
     check_deck_refusals(pack, workdir, checks)
 
 
