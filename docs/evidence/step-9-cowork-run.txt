@@ -1,0 +1,155 @@
+======================================================================
+step 9 -- the Cowork run, and the answer to the outbound PUT question
+deployed 28baf05cd304, seed 42 on Aurora, all three Skills uploaded zipped
+run id delivery-review-2026-08-r1
+======================================================================
+
+The prompt named no bucket, no key, no URL and no upload. "Publish it" was the
+only addition to step 8's wording, deliberately vague, so that the run would
+only publish if the Skill carried it:
+
+    Produce the August 2026 delivery review from the BizData connector. Use the
+    delivery review skills. Publish it and tell me what you found.
+
+----------------------------------------------------------------------
+1. the question this run existed to answer
+----------------------------------------------------------------------
+
+  Can Cowork's sandbox make an outbound HTTPS PUT to a presigned URL?
+
+  YES.
+
+  Both artifacts are in the bucket, written by the agent through presigned
+  URLs the server minted. Nothing else in the build could have established
+  this, and the whole publish path rested on it.
+
+    $ aws s3 ls s3://bizdata-runs-142940389238/runs/delivery-review-2026-08-r1/
+
+    2026-08-23 22:00:06      48449 delivery-review-2026-08.pptx
+    2026-08-23 22:00:05      21917 engagement-book-2026-08.xlsx
+    2026-08-23 22:00:12       1579 ledger.json
+    2026-08-23 22:00:12       7666 run-log.json
+
+  Four objects. The two artifacts land six and seven seconds before the two
+  the server writes, which is the two-phase shape visible in the timestamps:
+  the agent's uploads complete, then the finalising call heads each key and
+  only then writes the log and the ledger.
+
+----------------------------------------------------------------------
+2. two calls, not one
+----------------------------------------------------------------------
+
+  The run called publish_pack to mint, uploaded, then called it again with
+  finalize. The archived log holds exactly one publish_pack line -- the
+  minting call. The finalising call is absent, which is correct and is what
+  the ledger's tool_calls_note explains: a run's log cannot contain the call
+  that wrote it.
+
+----------------------------------------------------------------------
+3. the ledger, read back from the bucket
+----------------------------------------------------------------------
+
+  run_id                 delivery-review-2026-08-r1
+  period                 2026-08
+  status                 complete
+  scoring_model_version  v1.0
+  server_version         0.3.0+28baf05cd304      <- the deployed build
+  tool_calls             23
+  artifacts              3 described, ledger_key names the 4th
+
+  tools_used   list_engagements      1
+               get_time_summary      1
+               get_engagement_burn  10
+               get_financials       10
+               publish_pack          1
+
+----------------------------------------------------------------------
+4. the run log is the real one
+----------------------------------------------------------------------
+
+  lines                 23
+  distinct run ids      1        {'delivery-review-2026-08-r1'}
+  ledger's count        23       agrees with the file beside it
+
+  No ingestion lag: the count is not short, it is exact. And the tool mix
+  corroborates the run's own narrative independently -- ten get_engagement_burn
+  and ten get_financials against the run's claim to have "examined 10 of the 18
+  in detail". The server's record and the agent's account agree without either
+  having been written from the other.
+
+  The unique run id rule held. The dress rehearsal's failure mode -- a reused
+  id merging two runs into one archived log, 53 lines where 26 were expected --
+  did not recur.
+
+----------------------------------------------------------------------
+5. the Drive save did not happen, and the reason is a finding
+----------------------------------------------------------------------
+
+  The one Done-when condition this run did not meet.
+
+  The run created the Drive folder, so it can write to Drive. What it could
+  not do is put a file there:
+
+    "the Drive connector only accepts file content inline in the request, and
+     re-encoding a 48 KB deck through that path risks silent corruption -- not
+     something I'll do to a partner deliverable"
+
+  A text-only file surface cannot carry a .pptx or a .xlsx. The run declined
+  rather than base64ing a binary through a field meant for text and hoping,
+  which is the right call: a corrupt deck that opens is worse than no deck.
+
+  So the run-id-in-filename convention -- engagement-book-2026-08-<run_id>.xlsx
+  -- is specified in two Skills and remains unexercised. It is not wrong; it
+  is untested, and the reason is upstream of it.
+
+----------------------------------------------------------------------
+6. regression cover -- everything step 8 checked, still true
+----------------------------------------------------------------------
+
+  Read from the artifacts in the bucket, not from the transcript.
+
+  exception rows        7        5, 8, 9, 12, 20, 22, 25
+                                 identical to step 8's seven
+  Exceptions columns    7        engagement_id, flag, triggers, situation,
+                                 cause, recommended_action, decision_owner
+  distinct cause        1        'not determinable from available data'
+  live formula cells   65
+  slides                8
+  RED detail slides     3        capped, though five engagements are RED
+
+  Engagement 12, verbatim:
+
+    triggers  concentration above median fee
+    action    None. This trigger is a reason to look, not a decision to take.
+
+  Engagement 25 carries its low confidence everywhere it appears and claims
+  nothing about completion:
+
+    The projection is low confidence -- 2 of the trailing 4 readable weeks
+    have no time logged against this engagement -- and is not a basis for
+    action.
+
+  Engagement 5 is NEEDS REVIEW rather than RED: two true numbers pointing
+  opposite ways, the contradiction outranking the fixed-fee margin trigger.
+
+  The six triage lists, written out before any detail call:
+
+    A burn > 70              8, 9, 15, 19, 25
+    B not green              5, 8, 9, 20, 22
+    C concentration > 70     12
+    D ended in period        2
+    E silent >= 14 days      25
+    F margin < 15            5
+
+    union = 10: 2, 5, 8, 9, 12, 15, 19, 20, 22, 25
+
+  Same union as step 8 and same as the harness.
+
+----------------------------------------------------------------------
+7. nothing was read back from Drive
+----------------------------------------------------------------------
+
+  Every figure traces to a tool call in the archived log. The run opened no
+  prior month's file to compare, which is what the "Drive is output only"
+  rule exists to prevent. Trivially true this time, since it could not read
+  or write files there at all.
