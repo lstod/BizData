@@ -1,0 +1,202 @@
+Step 10 — the Cowork run: installed from the marketplace, ran end to end
+=========================================================================
+
+  Date            2026-08-24 (run published 2026-08-25T02:42:36Z)
+  Install         Marketplace (BizData) -> BizData delivery review v1.0.0
+  Run id          delivery-review-2026-08-20260825a
+  Server build    0.3.0+89e53b18a84f          <- the commit that added the plugin
+  Seed            42, period 2026-08, 18 active engagements
+  Prompt          one paragraph, no skill named, no flag, no threshold, no engagement id
+
+  Screenshots     step-10/plugin-installed-skills.png
+                  step-10/connector-page-connected.png
+                  step-10/connector-add-dialog.png
+  Artifacts       step-10/engagement-book-2026-08_1.xlsx
+                  step-10/delivery-review-2026-08.pptx
+
+Both artifacts are byte-identical to the objects in the archive — md5 matches the
+etag the ledger recorded for each. What is banked here is what was published.
+
+
+-----------------------------------------------------------------------
+1. the install: three Skills, five tools, no OAuth values entered
+-----------------------------------------------------------------------
+
+Installed from the `lstod/BizData` marketplace, not uploaded. The plugin page shows
+version 1.0.0, author BizData, source "Marketplace (BizData)", and all three Skills
+as slash commands:
+
+    /assemble-delivery-pack
+    /house-format
+    /scope-escalation
+
+The connector page shows `bizdata` **connected** — a Disconnect button, the endpoint,
+and all five tools with permissions:
+
+    Get engagement burn · Get financials · Get time summary
+    List engagements · Publish pack
+
+Five, not four. A cached `tools/list` would have shown four.
+
+**No OAuth client id or secret was entered.** The fields in the add-connector dialog
+appeared uneditable, and the connector worked without them. That is the outcome the
+local proof said should be impossible, so the rest of this section is about why.
+
+
+-----------------------------------------------------------------------
+2. why it authenticated, and what that does not prove
+-----------------------------------------------------------------------
+
+What is established server-side, and none of it depends on reading Cowork's UI:
+
+  a. **No dynamic client registration happened.** The user pool holds exactly two app
+     clients, `cowork-connector` and `bizdata-test-machine`, both created 2026-08-20.
+     Nothing was created during the install. Had Cowork fallen back to DCR it would
+     have failed, since Cognito does not support it.
+
+  b. **The token can only have come from `cowork-connector`.** server/auth.py rejects
+     any token whose `client_id` is not in BIZDATA_OAUTH_CLIENT_ID, which holds those
+     two ids. The other is client_credentials-only and is used by check_auth.py. A
+     browser-flow token from `Claude-User` is the connector client.
+
+  c. **That client is confidential.** It carries a 52-character secret, and its token
+     endpoint refuses an exchange without one — measured, `invalid_client` /
+     `invalid_client_secret`, against `invalid_grant` when the secret is supplied.
+     See step-10-local-plugin-proof.txt §4.
+
+  d. **Nothing re-authenticated during the run.** Every request in the window logged
+     `"authenticated": true`, 67 × 200 and 0 × 401. There was no failed attempt, no
+     retry, no fresh authorization.
+
+  e. **A prior authorization was still live.** The app client's refresh token validity
+     is 30 days and its access token 60 minutes. The connector was hand-registered
+     with its client id *and secret* at steps 4–5 on 2026-08-20 and used for the Cowork
+     runs at steps 8 and 9 on 2026-08-23 — one day before this run.
+
+So the conclusion the evidence supports is:
+
+    The plugin's declared connector resolved to an authorization this workspace
+    already held. No credential was needed because one had already been supplied,
+    by hand, four days earlier.
+
+And the conclusion it does **not** support:
+
+    That a plugin-installed connector authenticates a confidential client with no
+    secret. Nothing here shows that, and (c) says it cannot.
+
+This distinction is the whole finding and it is worth not rounding off. A demo on this
+machine looks like a one-step install. A fresh workspace — a reviewer, a new laptop, a
+different account — would hit the token endpoint with no stored credential, and (c)
+says what happens then.
+
+**Not yet distinguished.** Whether Cowork matched the plugin's `.mcp.json` connector to
+the existing connection *by URL*, or whether the add-connector dialog in
+`connector-add-dialog.png` created a second connector that inherited the stored
+credentials. The screenshots are consistent with either. The decisive test is one
+click: Disconnect on the connector page, then reconnect from the plugin alone. If it
+reconnects with no secret, the finding is much larger than described here. If it asks
+for one, (e) is confirmed and the note stands as written.
+
+
+-----------------------------------------------------------------------
+3. the regression check: the plugin delivered the same Skills the zips did
+-----------------------------------------------------------------------
+
+This is the check the runbook called the strongest available, because it does not
+depend on reading prose. Workbook compared cell by cell, formulas not values, against
+both prior Cowork runs:
+
+                        vs step-9 run          vs step-8 run
+    Summary             1 cell (run id)        1 cell (run id)
+    Engagements         IDENTICAL 19x41        IDENTICAL 19x41
+    Time Detail         IDENTICAL 76x10        IDENTICAL 76x10
+    Exceptions          13 cells               13 cells
+    Data Quality        IDENTICAL 23x6         IDENTICAL 23x6
+
+Three tabs cell-identical across three different delivery mechanisms — zip upload at
+step 8, zip upload at step 9, marketplace plugin at step 10. The packaging did not
+change what reached the sandbox, which is what step 7's finding made worth checking.
+
+The 13 differing cells in Exceptions are columns `situation` and `recommended_action`
+on the seven rows — the two fields the Skill deliberately leaves to the model to write.
+Those are *supposed* to vary. Every column that should be deterministic is.
+
+
+-----------------------------------------------------------------------
+4. the escalation content, re-verified
+-----------------------------------------------------------------------
+
+  Seven exception rows           5, 8, 9, 12, 20, 22, 25          as steps 8 and 9
+  Flags                          5 RED, 2 NEEDS REVIEW
+  Engagement 12 verbatim         "None. This trigger is a reason to look, not a
+                                  decision to take."               exact match
+  Re-baselining language         absent
+  Engagement 25 called complete  absent — the row says "Absent data is not evidence
+                                  of completion"
+
+The two NEEDS REVIEW rows are the ones that show the policy is being applied rather
+than pattern-matched. Engagement 5 fires the fixed-fee RED rule on margin alone, and
+the run declined to call it RED because burn is healthy at 65.1% while margin is
+-17.6% — a contradiction the data cannot resolve, so it escalated the contradiction
+instead of picking a side. Engagement 12 recommends nothing at all, on a $478,040
+engagement with 85.4% single-person concentration.
+
+  Coverage gate     week of 2026-08-10 at 16.7%, below the 60% floor -> week excluded
+                    from every run rate and projection, and said so
+  Late entries      5.8%, under the 20% stop condition -> run proceeded
+  Triage            all six triggers, 10 engagements pulled for detail rather than the
+                    5 that burn and health band alone would have surfaced
+  Archive           runs/delivery-review-2026-08-20260825a/ — both artifacts, run log,
+                    ledger. 23 tool calls, 5 distinct tools
+
+
+-----------------------------------------------------------------------
+5. a real defect the run surfaced, and the self-check caught it
+-----------------------------------------------------------------------
+
+The run's own narrative: *"Slide 1 shows 'Scoring model n/a' — checking where the
+builder reads it from."* It then added the value and rebuilt both files in order.
+
+This is not a packaging regression. `plugin/skills/` was untouched by step 10 — git
+confirms it — and the defect is a three-way disagreement that predates the plugin:
+
+  assemble-delivery-pack/SKILL.md   the documented pack.json shape has **no**
+                                    top-level scoring_model_version at all
+  build_workbook.py:373             reads it top-level, and **falls back** to
+                                    pack["time_summary"]["scoring_model_version"]
+  build_deck.py:301,594             reads it top-level only, no fallback ->
+                                    renders the literal string "n/a"
+
+The tools return `scoring_model_version` inside every response, so the natural pack
+built from the documented schema has it nested under `time_summary` and nowhere else.
+The workbook then renders it and the deck does not.
+
+**Why no harness caught it:** check_pack.py:148 synthesizes its pack.json with
+`scoring_model_version` at the top level — a shape the SKILL never instructs anyone to
+produce. So 427 assertions a seed pass against a fixture whose shape the documented
+process does not generate. That is the same class of gap as step 9's SigV4 finding:
+the harness agreed with itself.
+
+**What did work:** house-format/assets/self-check.md caught it before publishing, which
+is exactly what it is for. The run fixed it and shipped a correct deck — both decks,
+step 9's and step 10's, read "Scoring model v1.0" on slide 1. The defect costs a rebuild
+cycle, not a wrong artifact, and only because the self-check is in the Skill.
+
+Fix is one line twice: give build_deck.py the fallback build_workbook.py already has,
+and add the nested-only shape to check_format.py. Not done here — step 10 changed no
+Skill, and keeping that true is worth more than folding an unrelated fix into it.
+
+
+-----------------------------------------------------------------------
+6. smaller things this run observed
+-----------------------------------------------------------------------
+
+**Both MCP protocol revisions, from one client.** Step 5 found two: `python-httpx` on
+`2025-11-25` for registration and `Claude-User` on `2026-07-28` at runtime. This run
+shows `Claude-User` sending **both**, interleaved, plus some requests with no version
+at all. The step-5 finding holds and is broader than "probe versus runtime" — a server
+strict about a single revision would fail intermittently rather than at registration.
+
+**Drive is still the gap, unchanged from step 9.** The run found the folder and declined
+to push 95 KB of encoded binary through a text-only surface, saying so rather than
+shipping a possibly-corrupt workbook. Same limitation, same call, independently reached.

@@ -13,8 +13,8 @@ assemble the pack. **Build in progress** — steps 0 through 10 and 14 of 14 are
 deployed on AWS behind Cognito and answering tool calls from a Cowork connector; the Skills
 produce the engagement book and the partner deck, to a format that does not vary; a finished pack
 lands in an S3 archive of record with its tool-call log and ledger beside it; and the whole thing
-installs as a plugin. The architecture write-up, the security posture and the demo land at
-step 11.
+installs as a plugin from this repository, which is its own marketplace. The architecture
+write-up, the security posture and the demo land at step 11.
 
 ## All of the data here is synthetic
 
