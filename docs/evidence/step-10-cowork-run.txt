@@ -89,13 +89,57 @@ machine looks like a one-step install. A fresh workspace — a reviewer, a new l
 different account — would hit the token endpoint with no stored credential, and (c)
 says what happens then.
 
-**Not yet distinguished.** Whether Cowork matched the plugin's `.mcp.json` connector to
-the existing connection *by URL*, or whether the add-connector dialog in
-`connector-add-dialog.png` created a second connector that inherited the stored
-credentials. The screenshots are consistent with either. The decisive test is one
-click: Disconnect on the connector page, then reconnect from the plugin alone. If it
-reconnects with no secret, the finding is much larger than described here. If it asks
-for one, (e) is confirmed and the note stands as written.
+
+-----------------------------------------------------------------------
+2a. the disconnect/reconnect test — run 2026-08-24, finding closed
+-----------------------------------------------------------------------
+
+Disconnected the connector on the plugin's connector page, then reconnected from the
+plugin alone, adding no custom connector.
+
+  Result:  it reconnected with **nothing entered** — no client id, no secret.
+           It also **retained the "always allow" tool permissions** set before the
+           disconnect.
+
+Taken alone the first line looks like the larger finding: a plugin connector completing
+OAuth against a confidential client with no credential. It is not, and the second line
+is what shows why.
+
+**The retained permissions are the tell.** Per-tool permissions are connector-scoped
+user state. Had Disconnect actually forgotten the connector they would have reset to
+defaults. They did not, so Disconnect preserves connector-scoped state — and a stored
+OAuth credential is connector-scoped state of exactly the same kind.
+
+**The protocol closes it independently of any UI reading.** The remaining question was
+whether Cowork completed a fresh authorization or merely refreshed an existing one. It
+does not matter, because *both* require the secret. Measured against Cognito, same
+discriminator as §4 of the local proof:
+
+    refresh, no secret         400  {"error":"invalid_client",
+                                     "error_description":"invalid_client_secret"}
+    refresh, secret via Basic  400  {"error":"invalid_grant"}
+
+Refresh is not a way around client authentication. Access tokens here last 60 minutes,
+so a connector still working an hour later is one that can mint new tokens, and minting
+requires the secret whichever grant is used.
+
+    Therefore Cowork holds the client secret and retained it through Disconnect.
+
+Two independent lines of evidence agreeing — one observable in the UI, one measured at
+the token endpoint. §2's conservative reading is confirmed rather than overturned, and
+it is worth noting that the test's headline result pointed the other way. The
+corroborating detail is what made it decidable.
+
+**The one case still untested by hand now has a known answer.** A workspace that never
+supplied the secret cannot authenticate this connector. That is no longer an inference:
+every grant type the client supports requires client authentication, and a manifest
+cannot carry the credential, so a fresh workspace has nothing to present.
+
+**A smaller finding, and it belongs in SECURITY.md.** "Disconnect" does not revoke. It
+ends the session and keeps both the credential and the tool permissions. A user who
+disconnects a connector intending to withdraw its access has not done that, and nothing
+in the UI says so. Worth a line at step 11 — the gap between what a control is called
+and what it does is exactly what a security reviewer asks about.
 
 
 -----------------------------------------------------------------------
