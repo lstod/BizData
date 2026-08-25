@@ -9,10 +9,12 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 7 and 14 of 14 are done. The server is
+assemble the pack. **Build in progress** — steps 0 through 10 and 14 of 14 are done. The server is
 deployed on AWS behind Cognito and answering tool calls from a Cowork connector; the Skills
-produce the engagement book and the partner deck, to a format that does not vary. The
-architecture write-up, the security posture and the demo land at step 11.
+produce the engagement book and the partner deck, to a format that does not vary; a finished pack
+lands in an S3 archive of record with its tool-call log and ledger beside it; and the whole thing
+installs as a plugin. The architecture write-up, the security posture and the demo land at
+step 11.
 
 ## All of the data here is synthetic
 
@@ -110,6 +112,40 @@ curl -s -X POST http://127.0.0.1:8000/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{
        "io.modelcontextprotocol/protocolVersion":"2026-07-28",
        "io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+## Installing it as a plugin
+
+The three Skills and the remote connector are one plugin. This repository is also its own
+marketplace, so no separate distribution step exists: in Cowork, open **Customize → Plugins**,
+add the marketplace `lstod/BizData`, and install **BizData delivery review**. In the CLI:
+
+```bash
+claude plugin marketplace add lstod/BizData
+claude plugin install bizdata-delivery-review@bizdata
+```
+
+For anywhere a marketplace cannot be added, `scripts/package_plugin.sh` builds an uploadable
+`build/bizdata-delivery-review.zip`.
+
+`plugin/.mcp.json` declares the connector as a remote HTTP server with its OAuth client id,
+callback port, scopes and discovery URL — all of which a real client honours, without attempting
+the dynamic client registration Cognito does not support. What it cannot declare is the **client
+secret**, because the manifest format has no field for one, deliberately: secrets belong in the
+OS keychain and not in a file that gets committed. This build uses a confidential Cognito client,
+so the connector needs that one value supplied out of band at install time. The Skills need
+nothing.
+
+That is the whole of the limitation, and it is measured rather than assumed —
+`docs/notes/plugin-packaging.md` has the token-endpoint evidence isolating it to client
+authentication and nothing else, along with what closing it would cost.
+
+`scripts/check_plugin.py` asserts all of this on every run: 46 assertions covering the manifests,
+the bundled scripts, the package hygiene, that no credential ships, and that the endpoint and
+client id in the manifest are still the ones deployed. `--offline` drops the six needing AWS.
+
+```bash
+python scripts/check_plugin.py            # requires Claude Code v2.x for two of them
 ```
 
 ## Assembling the pack
@@ -261,7 +297,12 @@ server/
   archive.py              a directory, or the S3 bucket the runs land in
   runlog.py               an in-process buffer, or CloudWatch Logs
   tools/                  the four read tools and publish_pack, one module each
-plugin/
+.claude-plugin/
+  marketplace.json        this repository, acting as its own plugin marketplace
+plugin/                   the plugin root; installs as a unit
+  .claude-plugin/
+    plugin.json           name, version, description -- the namespace for the Skills
+  .mcp.json               the remote connector: url, and OAuth minus the secret
   skills/                 the Skills, one directory each
     assemble-delivery-pack/
       SKILL.md            order of operations, the coverage rule, stop conditions
@@ -270,6 +311,9 @@ plugin/
       SKILL.md            the tabs, the slides, the formulas, the voice
       scripts/            build_deck.py: eight slides, no arithmetic
       assets/             self-check.md, run against the files before shipping
+    scope-escalation/
+      SKILL.md            the RED list, NEEDS REVIEW, and what never to decide
+      scripts/            classify.py: the flags, but not the judgment
 infra/
   bootstrap/              Terraform state bucket and the budget alarm, local state
   main/                   everything else, S3 backend with native locking
@@ -283,8 +327,10 @@ scripts/
   check_escalation.py     the escalation policy's, against the Exceptions tab
   check_publish.py        the archive's, against a directory standing in for the bucket
   check_archive.py        the archive's, against the real bucket over HTTPS
+  check_plugin.py         the plugin's: manifests, bundle, currency, no credential shipped
   sweep.sh                the SQL checks across every reserved seed
-  package_skill.sh        zip a Skill directory for upload, without the macOS cruft
+  package_skill.sh        zip one Skill for upload, without the macOS cruft
+  package_plugin.sh       zip the whole plugin, for the upload install path
 docker-compose.yml        local Postgres for steps 1 to 4
 ```
 

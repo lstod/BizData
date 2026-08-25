@@ -242,10 +242,15 @@ backend.hcl
 # .terraform.lock.hcl is deliberately not ignored. The provider lock file
 # belongs in version control so a clone resolves the same provider builds.
 
-# Skill bundles for upload. Build artifacts of scripts/package_skill.sh, rebuilt from the
-# working tree on demand, so committing one only creates a second source of truth for what
-# is in a Skill.
+# Skill and plugin bundles for upload. Build artifacts of scripts/package_skill.sh and
+# scripts/package_plugin.sh, rebuilt from the working tree on demand, so committing one only
+# creates a second source of truth for what is in a Skill.
+#
+# They land under build/ — which is already ignored above — rather than beside the sources
+# they are built from. Step 10 moved them: plugin/ is now the root of an installable plugin,
+# and an archive sitting inside it ships inside the package.
 /plugin/skills/*.zip
+/plugin/*.zip
 
 # macOS
 .DS_Store

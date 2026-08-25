@@ -101,11 +101,23 @@ variable "oauth_callback_urls" {
     is whatever Cowork sends and is read off Cognito's error page on the first
     failed attempt; these are the published Claude connector callbacks as a
     starting point.
+
+    The localhost entry is step 10's, and it is a different client rather than a
+    different environment. Cowork redirects to claude.ai; the Claude Code CLI runs
+    the same authorization_code flow against a loopback listener and sends
+    http://localhost:PORT/callback. Both have to be registered for the plugin
+    manifest to be installable in both places, and Cognito exact-matches, so the
+    port is pinned here and in plugin/.mcp.json's oauth.callbackPort rather than
+    left to the CLI's default of picking a free one.
+
+    http:// is legal here only because the host is localhost; Cognito rejects the
+    scheme for any other host.
   EOT
   type        = list(string)
   default = [
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+    "http://localhost:8765/callback",
   ]
 }
 
