@@ -1,0 +1,22 @@
+{
+  "name": "bizdata",
+  "owner": {
+    "name": "BizData"
+  },
+  "metadata": {
+    "description": "The delivery and margin review plugin built in this repository."
+  },
+  "plugins": [
+    {
+      "name": "bizdata-delivery-review",
+      "source": "./plugin",
+      "description": "The monthly delivery and margin review for a professional services portfolio: assemble the pack, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
+      "category": "professional-services",
+      "tags": [
+        "delivery-review",
+        "engagement-margin",
+        "scope-escalation"
+      ]
+    }
+  ]
+}

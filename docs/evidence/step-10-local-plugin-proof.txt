@@ -1,0 +1,211 @@
+Step 10 — the plugin, proved against a real client before Cowork saw it
+=======================================================================
+
+  Date          2026-08-24
+  Client        Claude Code 2.1.243   (the checkout's own CLI was 1.0.17, which has
+                                       no `plugin` subcommand at all — it drops into
+                                       an interactive session instead)
+  Plugin        plugin/, loaded with --plugin-dir
+  Endpoint      https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp
+  Deployed at   b71cd1de84f7
+
+This file answers the question step 10 exists to answer, and it answers it on a laptop
+against a real client rather than by reading documentation. The Cowork run is separate;
+this is what was known before it started.
+
+
+-----------------------------------------------------------------------
+0. the plan's premise, tested first
+-----------------------------------------------------------------------
+
+  docs/build-1-plan.md said the manifest format "is built around command-style local
+  servers", so finding where a remote connector fits awkwardly would be the deliverable.
+
+  That is false as of this client version. `.mcp.json` takes a remote server as a
+  first-class case, and the whole OAuth front half is expressible:
+
+      {"mcpServers": {"bizdata": {
+        "type": "http",
+        "url":  "...",
+        "oauth": {"clientId": ..., "callbackPort": ..., "scopes": ...,
+                  "authServerMetadataUrl": ...}}}}
+
+  So the interesting question is not whether a remote connector fits. It is what the
+  one missing field costs.
+
+
+-----------------------------------------------------------------------
+1. both manifests pass Anthropic's own validator, strictly
+-----------------------------------------------------------------------
+
+  $ claude plugin validate ./plugin --strict
+  Validating plugin manifest: .../plugin/.claude-plugin/plugin.json
+  ✔ Validation passed
+
+  $ claude plugin validate . --strict
+  Validating marketplace manifest: .../.claude-plugin/marketplace.json
+  ✔ Validation passed
+
+  --strict makes warnings count. One was found and fixed on the way: the marketplace
+  carried a metadata.note key, and metadata is documented as free-form but its subfields
+  are still checked against a known set. An unrecognised field is usually a misspelling
+  of one that would have done something, which is why the flag is worth using.
+
+  Both are now assertions 45 and 46 of scripts/check_plugin.py rather than a thing
+  somebody ran once.
+
+
+  The Skills validate as components too, which is a different check from the manifest —
+  it reads the frontmatter of each SKILL.md rather than the plugin.json around them:
+
+  $ claude plugin validate ./plugin/skills --strict
+  Validating components in: .../plugin/skills
+  ✔ Validation passed
+
+  Watching all three actually *fire* needs a signed-in session, and this machine's CLI is
+  not signed in ("Not logged in · Please run /login"). It is also the Done-when Cowork
+  owns — "a fresh install through Customize makes all three Skills fire" — so it is not
+  duplicated here. What this file establishes is that they are structurally loadable and
+  that nothing is missing from the bundle.
+
+
+-----------------------------------------------------------------------
+2. the remote connector loads, and is recognised as remote
+-----------------------------------------------------------------------
+
+  $ claude --plugin-dir ./plugin mcp list
+
+  plugin:bizdata-delivery-review:bizdata:
+      https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp (HTTP)
+      - ! Needs authentication
+
+  Loaded, typed HTTP, and correctly reported as unauthenticated. Nothing about the
+  remote shape is awkward.
+
+
+-----------------------------------------------------------------------
+3. every OAuth field in the manifest is honoured — this is the good news
+-----------------------------------------------------------------------
+
+  $ claude --plugin-dir ./plugin mcp login plugin:bizdata-delivery-review:bizdata \
+        --no-browser
+
+  The authorization URL it built, wrapped for reading:
+
+    https://bizdata-142940389238.auth.us-west-2.amazoncognito.com/oauth2/authorize
+      ?response_type=code
+      &client_id=7oq9stej5qcj0agk3nmq3h1jq5
+      &code_challenge=y0M4q99oDy1RMvcjCZ8lSxBSuzrHDwtUQodqVwotfns
+      &code_challenge_method=S256
+      &redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fcallback
+      &state=mG9GaTeeERujCprXmqKIFyiFfDXbmnDycSNnGOuTwy4
+      &scope=openid+bizdata%2Fread
+      &resource=https%3A%2F%2F663kcclzvh.execute-api.us-west-2.amazonaws.com%2Fmcp
+
+  Read against plugin/.mcp.json, field by field:
+
+    client_id           7oq9stej5qcj0agk3nmq3h1jq5   the manifest's oauth.clientId
+    redirect_uri        localhost:8765/callback      the manifest's oauth.callbackPort
+    scope               openid bizdata/read          the manifest's oauth.scopes
+    authorize endpoint  Cognito's hosted UI          discovered via the manifest's
+                                                     authServerMetadataUrl
+
+  Four fields set in a committed file, four fields used. **No dynamic client
+  registration was attempted**, which matters because Cognito does not support DCR —
+  had the client ignored the pinned id and tried to register, the flow would have died
+  here with the "Incompatible auth server" error rather than reaching a token endpoint.
+
+  code_challenge_method=S256 confirms PKCE. The `resource` parameter is RFC 8707.
+
+
+-----------------------------------------------------------------------
+4. where it stops, isolated to one step
+-----------------------------------------------------------------------
+
+  The authorization request above is well-formed and would succeed. The token exchange
+  is the half that cannot complete, because the Cognito app client is confidential
+  (infra/main/cognito.tf, generate_secret = true) and the manifest has no field for a
+  secret.
+
+  Proved directly against Cognito's token endpoint. Same endpoint, same client, same
+  redirect URI, same deliberately-invalid authorization code. The single variable is
+  whether client authentication is present:
+
+    no secret, client_id in body   HTTP 400  {"error":"invalid_client",
+                                              "error_description":"invalid_client_secret"}
+
+    secret via HTTP Basic          HTTP 400  {"error":"invalid_grant"}
+
+  The second response is the control and it is the one that makes the first mean
+  something. With the secret, Cognito gets past client authentication and rejects the
+  bad code — invalid_grant. Without it, Cognito never looks at the code at all —
+  invalid_client. The failure is at client authentication and nowhere else. It is not
+  the scopes, not the redirect URI, not discovery, not the resource indicator.
+
+  This is step 9's lesson applied deliberately: a negative assertion is only meaningful
+  next to the positive it inverts. On its own, "the token request failed" would have
+  been consistent with any of six causes.
+
+
+-----------------------------------------------------------------------
+5. a hand-added server can hold the secret; a plugin server has nowhere to put it
+-----------------------------------------------------------------------
+
+  The same endpoint, added by hand:
+
+  $ MCP_CLIENT_SECRET=... claude mcp add --scope local --transport http \
+        --client-id 7oq9stej5qcj0agk3nmq3h1jq5 --client-secret --callback-port 8765 \
+        bizdata-handadded https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp
+
+  $ claude mcp get bizdata-handadded
+    Type: http
+    URL: https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp
+    OAuth: client_id configured, client_secret configured, callback_port 8765
+                                 ^^^^^^^^^^^^^^^^^^^^^^^^
+
+  Removed again afterwards; it existed only to prove the surface exists.
+
+  For the plugin-provided server, it does not:
+
+    claude mcp add --client-secret      creates a new server. It cannot configure one a
+                                        plugin already declared
+    claude mcp login <plugin server>    resolves the plugin server and runs the flow,
+                                        but takes no credential options at all —
+                                        only --no-browser
+    claude mcp get <plugin server>      does not resolve it: "No MCP server named
+                                        plugin:bizdata-delivery-review:bizdata"
+                                        — though mcp list shows it
+    claude plugin install --config      sets userConfig options only, and there is no
+                                        oauth.clientSecret field to route one into
+
+  The last line is the one that closes the door. plugin.json's userConfig can prompt for
+  a sensitive value and store it in the Keychain, and those values do substitute into MCP
+  server configs — but substitution needs a field to substitute into, and the oauth object
+  has clientId, callbackPort, scopes and authServerMetadataUrl. There is no secret field
+  to fill.
+
+
+-----------------------------------------------------------------------
+6. what this means, stated no more strongly than it was shown
+-----------------------------------------------------------------------
+
+  The plugin is not broken and the connector is not unusable. What is true is narrower:
+
+    - The manifest expresses a remote OAuth connector completely, except for the one
+      credential that must not live in a public file.
+    - The omission is deliberate on Anthropic's side, and correct: the client secret goes
+      to the OS keychain, never to config. A manifest that could carry one would be a
+      manifest people commit secrets into.
+    - For a **public** OAuth client the plugin would be entirely self-contained. This
+      build uses a confidential one, so it is not.
+    - The Skills — which are three quarters of the plugin, and the part with the domain
+      knowledge in it — install and work regardless. Nothing here touches them.
+
+  What it would cost to close: a second Cognito app client with generate_secret = false
+  and PKCE, added to BIZDATA_OAUTH_CLIENT_ID. Roughly fifteen lines of Terraform. It was
+  considered and declined for this build, so the limitation is a choice rather than a
+  wall, and docs/notes/plugin-packaging.md records the trade.
+
+  Whether Cowork has a surface Claude Code lacks — its connector form has an "OAuth
+  Client Secret (optional)" field, per step 4 — is the one thing this file cannot settle.
+  That is docs/evidence/step-10-cowork-run.txt.

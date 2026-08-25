@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "bizdata": {
+      "type": "http",
+      "url": "https://663kcclzvh.execute-api.us-west-2.amazonaws.com/mcp",
+      "oauth": {
+        "clientId": "7oq9stej5qcj0agk3nmq3h1jq5",
+        "callbackPort": 8765,
+        "scopes": "openid bizdata/read",
+        "authServerMetadataUrl": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_PD9ca9pyo/.well-known/openid-configuration"
+      }
+    }
+  }
+}

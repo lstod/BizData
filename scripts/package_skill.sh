@@ -11,6 +11,9 @@
 #
 # The archive contains the skill directory itself, so it unpacks to
 # <name>/SKILL.md alongside <name>/scripts/ and <name>/assets/.
+#
+# Output moved to build/skills/ at step 10. plugin/ is now the root of an installable
+# plugin, and an archive written beside the skills would be packaged inside it.
 
 set -euo pipefail
 
@@ -35,7 +38,10 @@ if [[ ! -f "$skills/$name/SKILL.md" ]]; then
     exit 1
 fi
 
-archive="$skills/$name.zip"
+outdir="$repo_root/build/skills"
+mkdir -p "$outdir"
+
+archive="$outdir/$name.zip"
 rm -f "$archive"
 
 # -x excludes rather than a copy-and-prune, so the archive is built from the working tree and
