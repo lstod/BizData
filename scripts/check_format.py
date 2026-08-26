@@ -110,6 +110,18 @@ NUMBER_RE = re.compile(r"[+-]?\d[\d,]*(?:\.\d+)?")
 ISO_DATE_RE = re.compile(r"\d{4}-\d{2}(-\d{2})?")
 
 
+def pack_version(pack: dict[str, Any]) -> Any:
+    """Where the version lives, restated rather than imported from the builder.
+
+    Same rule as LIVE_FORMULA_COLUMNS above and for the same reason: importing the builder's
+    lookup would assert that the builder agrees with itself. Both places have to be changed
+    together or this file fails, which is the point.
+    """
+    return pack.get("scoring_model_version") or pack.get("time_summary", {}).get(
+        "scoring_model_version"
+    )
+
+
 # --------------------------------------------------------------------------- the workbook
 
 
@@ -378,7 +390,9 @@ def check_traceability(prs: Any, pack: dict[str, Any], wb: Any, checks: Checks) 
     # number, and the scoring model version. Removed by exact text rather than by pattern, so
     # this cannot quietly swallow a real number that happens to look like a version.
     identifiers = [
-        str(pack[key]) for key in ("run_id", "scoring_model_version") if pack.get(key)
+        str(value)
+        for value in (pack.get("run_id"), pack_version(pack))
+        if value
     ]
 
     for i, slide in enumerate(prs.slides, start=1):
@@ -612,6 +626,91 @@ def check_red_slide_cap(pack: dict[str, Any], workdir: Path, checks: Checks) -> 
     )
 
 
+def check_nested_version(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
+    """The pack shape a run following the SKILL actually produces: version nested only.
+
+    This is the gap step 10's Cowork run walked into, and the reason it is worth a fixture of
+    its own. gather() puts `scoring_model_version` at the top level, so every one of the 427
+    assertions a seed passed against a shape the documented process does not generate — the
+    tools return the version inside each response, so a pack assembled from them has it under
+    `time_summary` and nowhere else. The workbook rendered it because it had a fallback. The
+    deck did not, and put "Scoring model n/a" on the title slide of a partner deck.
+
+    The harness agreed with itself, which is the same class of gap as step 9's SigV4 finding.
+    So the top-level key is deleted here rather than added: the fixture is made worse on
+    purpose, because the worse fixture is the honest one.
+    """
+    nested = copy.deepcopy(pack)
+    nested.pop("scoring_model_version", None)
+    version = str(nested.get("time_summary", {}).get("scoring_model_version") or "")
+
+    checks.add(
+        "the pack the skill documents carries the version under time_summary",
+        bool(version),
+        version or "no scoring_model_version on the get_time_summary response",
+    )
+    if not version:
+        return
+
+    path = workdir / "pack-nested-version.json"
+    path.write_text(json.dumps(nested, default=str, indent=2))
+    out = workdir / "deck-nested-version.pptx"
+
+    result = subprocess.run(
+        [sys.executable, str(DECK_BUILDER), str(path), "--out", str(out)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0 or not out.exists():
+        checks.add(
+            "deck: a pack with the version nested only still builds",
+            False,
+            result.stderr.strip()[:110],
+        )
+        return
+
+    slides = list(Presentation(out).slides)
+    title = " ".join(slide_text(slides[0]))
+    caveats = " ".join(slide_text(slides[-1]))
+    everything = " ".join(" ".join(slide_text(s)) for s in slides)
+
+    checks.add(
+        "deck: the title slide finds the version when the pack nests it",
+        f"Scoring model {version}" in title,
+        f"looked for {version!r} on slide 1",
+    )
+    checks.add(
+        "deck: the caveats slide finds it too, and not only the title",
+        f"Scoring model {version}" in caveats,
+        f"looked for {version!r} on slide {len(slides)}",
+    )
+    # Named separately from the two above because they would both pass on a deck that rendered
+    # the version somewhere and "n/a" somewhere else, which is the defect wearing a disguise.
+    checks.add(
+        "deck: no slide falls back to the literal 'n/a' for the scoring model",
+        "Scoring model n/a" not in everything,
+        "no 'Scoring model n/a' anywhere in the deck",
+    )
+
+    # The workbook has had the fallback since step 6 and nothing asserted it. An untested
+    # fallback is a fallback that stops working quietly.
+    book = workdir / "book-nested-version.xlsx"
+    built = subprocess.run(
+        [sys.executable, str(BUILDER), str(path), "--out", str(book)],
+        capture_output=True, text=True,
+    )
+    if built.returncode != 0 or not book.exists():
+        checks.add("workbook: a pack with the version nested only still builds", False, built.stderr.strip()[:110])
+        return
+
+    summary = load_workbook(book)["Summary"]
+    values = [str(c.value) for row in summary.iter_rows() for c in row if c.value is not None]
+    checks.add(
+        "workbook: Summary finds the version when the pack nests it",
+        version in values,
+        f"looked for {version!r} on Summary",
+    )
+
+
 def check_deck_refusals(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
     """The deck refuses a pack it cannot build honestly, rather than filling the gap.
 
@@ -722,6 +821,7 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks, workdir: 
     check_deck(deck, pack, wb, checks)
     check_clean_period(pack, workdir, checks)
     check_red_slide_cap(pack, workdir, checks)
+    check_nested_version(pack, workdir, checks)
     check_deck_refusals(pack, workdir, checks)
 
 

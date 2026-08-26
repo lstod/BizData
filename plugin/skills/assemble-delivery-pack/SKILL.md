@@ -203,6 +203,7 @@ nothing.
 {
   "period": "2026-08",
   "run_id": "delivery-review-2026-08",
+  "scoring_model_version": "<the value the tools returned, copied up to the top level>",
   "engagements": [ "<every list_engagements row, all pages, in order>" ],
   "portfolio": "<the portfolio block from the first list_engagements call, whole>",
   "time_summary": "<the whole get_time_summary response, including both blocks>",
@@ -221,6 +222,12 @@ nothing.
   ]
 }
 ```
+
+`scoring_model_version` is the one key here that is not simply a response copied in. Every tool
+returns it, so it is already inside `time_summary`; lifting it to the top level as well is what
+puts it on the workbook's `Summary` tab and the deck's title slide. Both builders fall back to the
+nested copy if it is missing, so a pack without it still renders — but say it once at the top and
+neither builder has to guess. A band is only comparable against the model that produced it.
 
 `burn` and `financials` hold only the engagements chosen at step 4. `portfolio` is copied whole
 from the first `list_engagements` response and is required — the deck refuses to build without

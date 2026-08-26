@@ -176,6 +176,21 @@ def fmoney(value: Any) -> str:
     return "n/a" if value is None else f"{float(value):,.0f}"
 
 
+def scoring_model_version(pack: dict[str, Any]) -> str:
+    """Top level if the pack carries it there, otherwise off the time summary.
+
+    The tools return the version inside every response, so a pack assembled from them has it
+    nested under `time_summary` and nowhere else. Reading top level only rendered "n/a" on the
+    title slide of a real run — the workbook showed the version and the deck did not, which is
+    the disagreement between two files built from one pack that the format exists to prevent.
+    """
+    return (
+        pack.get("scoring_model_version")
+        or pack.get("time_summary", {}).get("scoring_model_version")
+        or "n/a"
+    )
+
+
 def burn_colour(burn_pct: float | None) -> RGBColor:
     if burn_pct is None:
         return INK
@@ -298,7 +313,7 @@ def slide_1_title(prs: Any, pack: dict[str, Any]) -> None:
 
     generated = pack.get("generated_at") or dt.date.today().isoformat()
     write(frame, f"Generated {generated}", size=SMALL_SIZE, colour=MUTED)
-    write(frame, f"Scoring model {pack.get('scoring_model_version', 'n/a')}", size=SMALL_SIZE, colour=MUTED)
+    write(frame, f"Scoring model {scoring_model_version(pack)}", size=SMALL_SIZE, colour=MUTED)
     if pack.get("run_id"):
         write(frame, f"Run {pack['run_id']}", size=SMALL_SIZE, colour=MUTED)
 
@@ -591,7 +606,7 @@ def slide_8_data_quality(prs: Any, pack: dict[str, Any]) -> None:
         frame,
         f"Figures come from the BizData tools and are reproduced in "
         f"engagement-book-{pack['period']}.xlsx. Scoring model "
-        f"{pack.get('scoring_model_version', 'n/a')}.",
+        f"{scoring_model_version(pack)}.",
         size=SMALL_SIZE,
         colour=MUTED,
     )
