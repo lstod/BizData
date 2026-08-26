@@ -9,18 +9,53 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 10 and 14 of 14 are done. The server is
+assemble the pack. **Build in progress** — steps 0 through 11 and 14 of 14 are done. The server is
 deployed on AWS behind Cognito and answering tool calls from a Cowork connector; the Skills
 produce the engagement book and the partner deck, to a format that does not vary; a finished pack
 lands in an S3 archive of record with its tool-call log and ledger beside it; and the whole thing
-installs as a plugin from this repository, which is its own marketplace. The architecture
-write-up, the security posture and the demo land at step 11.
+installs as a plugin from this repository, which is its own marketplace. What remains is the
+scheduling work and the subagent fan-out, both additive.
+
+The security posture is in [SECURITY.md](SECURITY.md). What went wrong is further down, under
+[what broke](#what-broke), and it is the part worth reading.
 
 ## All of the data here is synthetic
 
 There is no real client, engagement, person or invoice in this repository, and there
 never was one. Every row comes out of `scripts/seed.py`, which composes names from word
 lists in `scripts/generator.py`. There is no real data to leak because none was ever loaded. This matters more than it usually does: the repository is public from day one, so synthetic only is load bearing rather than a preference.
+
+## How it fits together
+
+Cowork holds three Skills and calls a remote MCP server over OAuth. The server runs on Lambda,
+reads Aurora over the RDS Data API, and returns aggregates. The Skills build the workbook and the
+deck from those responses and publish the pack to an S3 archive of record.
+
+```
+                 three Skills
+Cowork ──────────────┬──────────── OAuth ────▶ API Gateway ──▶ Lambda ──Data API──▶ Aurora
+  │                                                              │
+  │                                              one JSON line per call ──▶ CloudWatch
+  │
+  └── the pack ──── presigned PUT ────▶ S3, beside its tool-call log and ledger entry
+```
+
+Seven decisions, and what each one is not:
+
+| Decision | Rather than | Why |
+| --- | --- | --- |
+| Aggregate in SQL and return rows | Return time entries and let the model total them | 40,000 entries is unarguably too many to hand to a model. This is not a preference to defend, it is the only thing that works — and it is what keeps "no figure in front of a partner was calculated by a model" true |
+| Aurora Serverless v2 at `MinCapacity 0`, reached over the Data API | A pooled connection from inside the VPC | The Data API is an HTTPS endpoint reached with IAM, so the Lambda needs no subnet, no ENI, no security group and **no NAT gateway** — about $32/month billed hourly whether or not anything flows through it. The price is per-call latency, discussed below |
+| Lambda behind the Web Adapter | A long-running container | The same ASGI app runs under `uvicorn` locally and on Lambda deployed, with no code change. A review that runs monthly should not be paying for a container the other 30 days |
+| Stateless MCP | Session affinity | Stateless since the `2026-07-28` revision, so any request can land on any cold instance. Scale-to-zero is the natural shape now, not a workaround |
+| Health as a score computed in SQL from a versioned weights table | Thresholds in a prompt | Changing a weight and re-running the harness turns a judgment call into a measurable regression. Weights are data, so it needs no redeploy |
+| One triage call carrying every dimension the triage rule may mention | A fan-out of detail calls | Triage costs one call instead of thirty. This one was learned three times — see [what broke](#what-broke) |
+| Read-only enforced by a database grant | Read-only enforced by the server's code | The server could be rewritten tomorrow to issue an `UPDATE` and it would still fail. `scripts/bootstrap_aurora.py` attempts a write on every run and records the refusal, so a change that widens the grant breaks the bootstrap rather than passing quietly |
+
+Two backends sit behind one interface in `server/db.py`, chosen by `BIZDATA_DB_BACKEND`: `psycopg`
+locally, the Data API deployed. Every query is text in `db/sql/` with named parameters and each
+adapter binds them its own way. That seam is why deploying at step 5 was a deployment and not a
+rewrite, and it is why seventeen fixture seeds can be swept on a laptop with no AWS account.
 
 ## Running it locally
 
@@ -99,7 +134,7 @@ The tools are checked the same way the data is, as assertions rather than descri
 
 That runs the server in memory and asserts the mess cases surface through the tool surface, that
 paging reaches `total_count`, that no response approaches the 1 MiB cap the Data API imposes at step
-5, and that every call left exactly one complete log line. 177 assertions per seed.
+5, and that every call left exactly one complete log line. 222 assertions per seed.
 
 The server is stateless, which is worth knowing before hand-writing a request to it: there is no
 `initialize` handshake and no session id, and every request carries its own protocol version in
@@ -203,10 +238,14 @@ it may not contain a number the workbook does not.
 .venv/bin/python scripts/check_format.py --seed 42 -v --keep /tmp/format
 ```
 
-44 assertions per seed: that every row of each formula column holds a formula string and reads the
+51 assertions per seed: that every row of each formula column holds a formula string and reads the
 columns it claims to, that the conditional formatting tests red before amber, that the slides are
 in order with data quality always last — including on a synthesised period with nothing to
 report — and that every number on every slide traces back to the workbook or the pack behind it.
+
+Five of those assert against a pack with `scoring_model_version` nested under `time_summary` and
+absent from the top level, which is the shape a run following the Skill actually produces. The
+fixture is made worse on purpose, because the worse fixture is the honest one.
 
 ## Engagement health is a number, not a threshold in a prompt
 
@@ -279,6 +318,116 @@ different but equally reproducible consultancy, with all eight mess cases presen
 different engagements.
 
 **Fifteen seeds are reserved as a fixture set: 9001 through 9015.** They exist so a scoring harness can run the same task across fifteen distinct portfolios and compare results between runs. Do not use them as demo or example seeds, the demo period uses seed 42, and 43 is the worked example of a second portfolio. All seventeen are verified to produce eight non-zero mess-case assertions.
+
+## What broke
+
+Three, and the third one broke three times.
+
+### The connector refused a laptop, one step earlier than the plan expected
+
+The written prediction was that the request would leave Anthropic's cloud, look for
+`127.0.0.1:8000`, and find its own loopback. It never got that far. Cowork's connector form
+rejects the URL on the **scheme**, client-side:
+
+> URL must start with 'https'
+
+The **Add** button never enables and nothing is sent. That is checkable rather than plausible,
+which is the point: the server was proved answering first, and across the whole exercise uvicorn's
+access log holds exactly three lines — all of them that preflight. No fourth line, no connection
+attempt, no TLS handshake.
+
+So there are two independent reasons a laptop cannot be a connector, and the one you actually hit
+is the cheaper one to explain: a loopback address has no certificate, so there is no `https` URL to
+give it. The mechanism the plan named may well be true and this build cannot claim to have
+demonstrated it. Screenshot: `docs/evidence/step-4-connector-failure.png`.
+
+### There was nowhere to put a bearer token, which cost a day's plan
+
+The same fifteen minutes found the more expensive thing. The form offers `OAuth Client ID
+(optional)`, `OAuth Client Secret (optional)`, and nothing else — no API key box, no custom
+headers. The build's auth sequence was "bearer token end to end first, then Cognito later," and a
+bearer-protected endpoint is one Cowork **cannot connect to at all**. Real OAuth had gone from a
+day's work sitting behind five droppable steps to load-bearing for the deployment gate.
+
+It was pulled forward, sequenced so the risk ordering survived anyway: applied first with
+`enable_auth = false`, proved with `curl`, banked in a commit, then Cognito applied on top. And the
+day collapsed to about sixty lines, because **the MCP v2 SDK is already a resource server** —
+`mcp.server.auth` ships the 401, the `WWW-Authenticate` header, RFC 9728 protected resource
+metadata and scope enforcement. Recognising that is most of the value. The alternative, and it is a
+common one, is hand-rolling an authorization facade in front of a server that already had one.
+
+The only genuinely Cognito-specific knowledge in the whole step is worth stating, because it
+produces broken integrations reliably. **A Cognito access token carries `client_id` and no `aud`;
+an ID token carries `aud` and no `client_id`.** So validating `aud` on an access token fails
+against a token that is perfectly valid, the usual response is `options={"verify_aud": False}`, and
+that removes the audience check while leaving nothing in its place. The fix is to check
+`client_id` — not to check nothing. `server/auth.py` also checks `token_use`, because Cognito signs
+ID tokens and access tokens with the same keys from the same pool, and omitting that check breaks
+nothing visible.
+
+### The triage tool did not carry what the triage rule needed, three separate times
+
+`list_engagements` first returned engagement metadata only. Deciding which engagements deserved a
+proper look therefore cost a fan-out of thirty `get_engagement_burn` calls — the tool answered
+"which engagements exist," when the question was "which ones should I look at." `burn_pct` and the
+health band moved into SQL and onto the triage row, and triage went from thirty calls to one.
+
+Then the same mistake, twice more, in a form that was harder to see:
+
+- **Step 6.** An engagement 85% delivered by one person, sitting at 67% burn in the green band, was
+  invisible to a filter of `burn_pct > 70 OR health_band != green`. Person concentration lived only
+  on `get_engagement_burn` — the call the filter was deciding whether to make. It went unexamined
+  on **15 of 17** fixture seeds.
+- **Step 8.** Same shape again for an engagement silent for three weeks and a fixed-fee engagement
+  under water, both sitting green and under 70% burn on **6 of 17** seeds.
+
+The rule was written down the first time and had to be learned three times:
+
+> A filter can only fire on what the triage row carries.
+
+`list_engagements` now carries six triggerable columns and the examine rule fires on all six.
+`check_pack.py` asserts that the examine set reaches the mess cases a burn threshold cannot, which
+is the assertion that would have caught all three.
+
+There is a fourth, smaller, in the same family and it is written up in
+`docs/evidence/step-10-cowork-run.txt` §5: the deck rendered `Scoring model n/a` on a title slide
+while the workbook rendered the version correctly, because the two builders disagreed about where
+in `pack.json` to find it and the harness synthesized its fixture in a shape the documented process
+never produces. 427 assertions a seed passed against a pack no real run would build. The harness
+agreed with itself.
+
+## Three questions this design invites
+
+Stated here because they are the right questions, and the honest answers are more useful than a
+README that pretends the trade-offs are not trade-offs.
+
+**The Data API adds latency to every call.** It does — `list_engagements` returns in about 1.1s
+warm against roughly 200ms locally, because every call is an HTTPS round trip with IAM auth rather
+than a checked-out connection. At production volume the answer is pooled connections through **RDS
+Proxy inside the VPC**, and the price is precisely the networking this design avoids: subnets,
+ENIs, a security group, and a NAT gateway at about $32/month billed hourly. For eighteen
+engagements reviewed once a month, per-call latency is the cheaper side of that trade. For a
+thousand engagements queried on demand it is not, and the migration is a `server/db.py` adapter
+rather than a rewrite — which is the reason that seam exists.
+
+**Seeding at real scale is not forty `BatchExecuteStatement` calls.** 40,000 rows over the Data API
+in batches of 1,000 takes **34.6s**. The same seed into local Postgres through `COPY` takes
+**0.7s** — a factor of about fifty. That is fine at this size and would not be at ten times it. The
+scale answer is a CSV in S3 and `aws_s3.table_import_from_s3`, and it is deliberately not built
+here, because the cost is only paid when someone reseeds and the honest number is more useful than
+a code path nothing exercises.
+
+**MCP on Lambda used to mean fighting session affinity.** The old objection was that `initialize`
+establishes a session and a scale-to-zero function loses it. That stopped being true at the
+`2026-07-28` revision: the protocol is stateless, there is no handshake and no session id, and
+every request carries its own protocol version in `params._meta`. Any request can land on any cold
+instance. Scale-to-zero is the natural shape for a workload that runs monthly, not a compromise
+around one.
+
+One measured caveat, because it is the kind of thing that bites later. Cowork sends **two protocol
+revisions from one client** — `2025-11-25` and `2026-07-28`, interleaved, plus some requests
+carrying no version at all. A server strict about a single revision would not fail at registration,
+which is where you would look. It would fail intermittently.
 
 ## Layout
 
