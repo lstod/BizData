@@ -125,6 +125,22 @@ number is wrong" a question with an answer.
 | `get_time_summary` | Forty thousand entries aggregated, with data quality and weekly reporting coverage alongside. |
 | `get_financials` | Invoiced, paid, unbilled work in progress, margin, and payment behaviour against the client's own history. |
 
+Four, and the number is a constraint rather than a coincidence: it is the read surface, and it is
+what a caller has to choose between when deciding what to look at. Two more tools bracket a *run*
+without joining it. `publish_pack` closes one out — the only write in the system. `get_run_ledger`
+opens one, and answers a different question from any of the four above:
+
+| Tool | Answers |
+| --- | --- |
+| `get_run_ledger` | Has this period already been published, and has anything moved since. Returns `first_run`, `unchanged` or `changed`, and names the entries filed since the last run. |
+
+That last one is what makes running the review on a schedule safe. Without it, a monthly job either
+rebuilds a period every time it fires — producing a second pack with the same figures under a new
+name — or it never notices the timesheet that arrived three days late. The ledger it reads is a
+per-period object in the same S3 archive the packs land in, not a database table: the server holds
+a `SELECT`-only credential and step 12 declined to widen it. `docs/notes/step-12-schedule.md` has
+the argument, including the two things that went wrong while building it.
+
 The tools are checked the same way the data is, as assertions rather than description:
 
 ```bash
@@ -134,7 +150,7 @@ The tools are checked the same way the data is, as assertions rather than descri
 
 That runs the server in memory and asserts the mess cases surface through the tool surface, that
 paging reaches `total_count`, that no response approaches the 1 MiB cap the Data API imposes at step
-5, and that every call left exactly one complete log line. 222 assertions per seed.
+5, and that every call left exactly one complete log line. 234 assertions per seed.
 
 The server is stateless, which is worth knowing before hand-writing a request to it: there is no
 `initialize` handshake and no session id, and every request carries its own protocol version in
@@ -445,7 +461,7 @@ server/
   toollog.py              one JSON line per call, seven fields
   archive.py              a directory, or the S3 bucket the runs land in
   runlog.py               an in-process buffer, or CloudWatch Logs
-  tools/                  the four read tools and publish_pack, one module each
+  tools/                  the four read tools, plus get_run_ledger and publish_pack
 .claude-plugin/
   marketplace.json        this repository, acting as its own plugin marketplace
 plugin/                   the plugin root; installs as a unit
@@ -475,6 +491,7 @@ scripts/
   check_format.py         the house format's, against the workbook and the deck
   check_escalation.py     the escalation policy's, against the Exceptions tab
   check_publish.py        the archive's, against a directory standing in for the bucket
+  check_ledger.py         the run ledger's; the one harness that writes to the database
   check_archive.py        the archive's, against the real bucket over HTTPS
   check_plugin.py         the plugin's: manifests, bundle, currency, no credential shipped
   sweep.sh                the SQL checks across every reserved seed

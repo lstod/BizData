@@ -47,6 +47,12 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from check_auth import Checks, client_credentials_token, post_mcp  # noqa: E402
 
+# Imported rather than rebuilt as a string. The pointer key is constructed by the server at
+# write time and by this script at read time, and a key assembled twice is a key that can be
+# assembled two ways — which would fail here as "the pointer was not written" and be
+# perfectly fine in production.
+from server.archive import PERIODS_PREFIX, period_key  # noqa: E402
+
 RUN_ID = "check-archive"
 PERIOD = "2026-08"
 WORKBOOK = f"engagement-book-{PERIOD}.xlsx"
@@ -372,6 +378,75 @@ def check_finalise(endpoint: str, token: str, s3, bucket: str, checks: Checks) -
         "and the ledger's count agrees with the file beside it",
         ledger.get("tool_calls") == (len(log) if isinstance(log, list) else -1),
         f"{ledger.get('tool_calls')} against {len(log) if isinstance(log, list) else 0}",
+    )
+
+    check_period_pointer(endpoint, token, s3, bucket, ledger, checks)
+
+
+def check_period_pointer(endpoint: str, token: str, s3, bucket: str, ledger: dict, checks: Checks) -> None:
+    """Step 12's read path, against the real bucket and through the real role.
+
+    **This is the only place the archive read is actually proven, and the reason is specific
+    rather than the usual local-models-S3 caution.** A caller without ``s3:ListBucket`` gets
+    ``403 AccessDenied`` from S3 for a key that does not exist, not ``404 NoSuchKey`` — S3
+    will not confirm absence to anyone who is not allowed to enumerate. This role has no
+    ListBucket by design, so ``S3Archive.get_bytes`` folds 403 into None to survive it.
+
+    ``LocalArchive`` has no such distinction to make. A missing file is simply None, so every
+    first-run assertion in check_ledger.py passes on seventeen seeds whether or not that fold
+    exists — and a first run would raise on Lambda. The assertion below that matters most is
+    therefore the *last* one, on a period nobody has ever published.
+
+    Both halves are exercised through the deployed endpoint rather than with these
+    credentials. The developer running this script has full access to the bucket and would
+    get a clean 404 for a missing key, which would prove the opposite of the point.
+    """
+    key = period_key(PERIOD)
+    listed = s3.list_objects_v2(Bucket=bucket, Prefix=f"{PERIODS_PREFIX}/")
+    checks.add(
+        "the period pointer is in the bucket, outside every run's prefix",
+        key in {o["Key"] for o in listed.get("Contents", [])},
+        key,
+    )
+
+    pointer = json.loads(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+    checks.add(
+        "and points at the run that just finalised",
+        pointer.get("run_id") == RUN_ID and pointer.get("figures_digest") == ledger.get("figures_digest"),
+        f"{pointer.get('run_id')}, digest {str(pointer.get('figures_digest'))[:8]}",
+    )
+
+    # Through the Lambda. This is GetObject exercised by the role that has no ListBucket.
+    status, read_back, text = call_tool(endpoint, token, "get_run_ledger", {"period": PERIOD})
+    checks.add(
+        "the deployed server can read the pointer back — GetObject, no Terraform change",
+        status == 200 and read_back.get("prior_run", {}).get("run_id") == RUN_ID,
+        f"HTTP {status} {text[:60]}" if status != 200 else f"decision {read_back.get('decision')}",
+    )
+    checks.add(
+        "and reads the period as already published rather than as a first run",
+        read_back.get("decision") in ("unchanged", "changed"),
+        str(read_back.get("decision")),
+    )
+
+    # The one that local cannot prove. A period nobody has run is a missing key, and S3
+    # answers a missing key with 403 for this role. It has to read as first_run, not error.
+    never_run = "1970-01"
+    status, absent, text = call_tool(endpoint, token, "get_run_ledger", {"period": never_run})
+    checks.add(
+        "a period never published reads as a first run, not as an S3 error",
+        status == 200 and absent.get("decision") == "first_run",
+        f"HTTP {status} {text[:80]}" if status != 200 else f"decision {absent.get('decision')}",
+    )
+    checks.add(
+        "and reports no prior run for it",
+        absent.get("prior_run") is None,
+        "null" if absent.get("prior_run") is None else str(absent.get("prior_run")),
+    )
+    checks.add(
+        "and did not write anything to reach that answer",
+        not s3.list_objects_v2(Bucket=bucket, Prefix=period_key(never_run)).get("Contents"),
+        f"no pointer for {never_run}",
     )
 
 

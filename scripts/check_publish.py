@@ -63,7 +63,7 @@ from mcp import Client  # noqa: E402
 from server import archive as archive_mod  # noqa: E402
 from server import build_info, db, toollog  # noqa: E402
 from server.app import mcp  # noqa: E402
-from server.tools.publish_pack import LEDGER_NAME, RUN_LOG_NAME  # noqa: E402
+from server.tools.publish_pack import LEDGER_NAME, RUN_ID_RE, RUN_LOG_NAME  # noqa: E402
 
 FIXTURE_SEEDS = (42, 43, *range(9001, 9016))
 
@@ -75,6 +75,9 @@ LOG_FIELDS = ("run_id", "tool", "arguments", "total_count", "returned_count", "l
 LEDGER_FIELDS = (
     "run_id", "period", "status", "published_at", "destination", "prefix",
     "scoring_model_version", "server_version", "artifacts", "tool_calls", "tools_used",
+    # Step 12's four. The first two are what the next run decides on; the second two are
+    # what let it say *how* a period changed when the watermark cannot enumerate it.
+    "watermark", "figures_digest", "entries_scanned", "invoices_scanned",
 )
 
 # Every way a caller could try to write outside its own folder, or over the server's own
@@ -427,7 +430,7 @@ def check_ledger(
     ledger = json.loads((store.root / f"{prefix}/{LEDGER_NAME}").read_bytes())
 
     checks.add(
-        "ledger.json carries every field step 12's table will need",
+        "ledger.json carries every field the period index is built from",
         all(f in ledger for f in LEDGER_FIELDS),
         ", ".join(f for f in LEDGER_FIELDS if f not in ledger) or "all present",
     )
@@ -488,6 +491,96 @@ def check_ledger(
     return ledger
 
 
+def check_period_pointer(store: Any, run_id: str, ledger: dict[str, Any], checks: Checks) -> None:
+    """The period index, written last and pointing at a run that is actually complete.
+
+    Step 12's ledger is a per-period object rather than a per-run one, because the question
+    it answers is "has August been done" and answering that from the per-run ledgers would
+    mean listing the bucket — which this role cannot do and is not being given.
+
+    The assertion worth having here is the last one. A run id cannot begin with an
+    underscore, so no run can be called ``_periods`` and no presigned URL handed to an agent
+    can be signed for a key under it. That is a property of two regexes agreeing, so it is
+    checked rather than asserted in a comment.
+    """
+    key = archive_mod.period_key(PERIOD)
+    raw = store.get_bytes(key)
+    checks.add("the period pointer was written", raw is not None, key)
+    if raw is None:
+        return
+    pointer = json.loads(raw)
+
+    checks.add(
+        "it points at this run",
+        pointer.get("run_id") == run_id and pointer.get("period") == PERIOD,
+        f"{pointer.get('period')} -> {pointer.get('run_id')}",
+    )
+    checks.add(
+        "and at the ledger of a run that finished",
+        pointer.get("ledger_key") == ledger.get("ledger_key")
+        and store.head(str(pointer.get("ledger_key"))) is not None,
+        str(pointer.get("ledger_key")),
+    )
+    for field in ("watermark", "figures_digest", "entries_scanned", "invoices_scanned"):
+        checks.add(
+            f"the pointer carries {field}, copied from the ledger it points at",
+            pointer.get(field) == ledger.get(field),
+            f"{pointer.get(field)}",
+        )
+    survives, detail = _watermark_survives_json()
+    checks.add("the watermark keeps microsecond resolution through JSON", survives, detail)
+    checks.add(
+        "and the archived one is tz-aware and reads back as the same instant",
+        _reads_back(ledger.get("watermark")),
+        str(ledger.get("watermark")),
+    )
+    checks.add(
+        "the pointer sits outside every run's prefix, so no grant can reach it",
+        key.startswith(f"{archive_mod.PERIODS_PREFIX}/")
+        and not RUN_ID_RE.match("_periods")
+        and not key.startswith(f"{archive_mod.DEFAULT_PREFIX}/{run_id}/"),
+        f"{key}, and _periods is not a legal run id",
+    )
+
+
+def _watermark_survives_json() -> tuple[bool, str]:
+    """A watermark that loses precision re-reports entries the last run already counted.
+
+    Tested on a synthetic microsecond-bearing instant rather than on the archived one, and
+    that is the whole point of the assertion. The generator stamps submitted_at on whole
+    seconds, so every watermark in every fixture already has microsecond=0 — which means
+    utcnow()'s ``replace(microsecond=0)`` could be dropped into publish_pack tomorrow and
+    an assertion that only inspected the real value would pass. The failure this guards
+    against is invisible in the data it would be checked against, so it is checked against
+    data chosen to expose it.
+
+    The path is the real one, and it has to be: an earlier version of this check built the
+    JSON itself and proved only that datetime.isoformat round-trips, which it does. Rounding
+    injected into publish_pack sailed straight past it. So the instant goes through
+    _ledger_entry — the function that actually writes the field — and back through
+    get_run_ledger._as_dt, the function that actually reads it.
+    """
+    from server.tools.get_run_ledger import _as_dt
+    from server.tools.publish_pack import _ledger_entry
+
+    original = dt.datetime(2026, 9, 12, 16, 4, 21, 123456, tzinfo=dt.timezone.utc)
+    entry = _ledger_entry(
+        run_id="precision-probe", period=PERIOD, prefix="runs/precision-probe",
+        destination="file://probe", artifacts=[], tool_calls=[], scoring_model_version=None,
+        watermark=original, figures_digest="probe", entries_scanned=0, invoices_scanned=0,
+    )
+    back = _as_dt(json.loads(json.dumps(entry, default=str))["watermark"])
+    return back == original, f"{original.isoformat()} -> {back.isoformat() if back else None}"
+
+
+def _reads_back(value: Any) -> bool:
+    """The archived watermark parses to a tz-aware instant, byte-for-byte as written."""
+    if value is None:
+        return True
+    parsed = dt.datetime.fromisoformat(str(value))
+    return parsed.isoformat() == str(value) and parsed.tzinfo is not None
+
+
 async def check_republish(
     client: Client, store: Any, run_id: str, files: dict[str, Path], first: dict[str, Any], checks: Checks
 ) -> None:
@@ -498,6 +591,9 @@ async def check_republish(
     Bucket versioning is what keeps the earlier copy, which is the case the Glacier rule in
     infra/main/storage.tf already anticipates.
     """
+    before = json.loads(store.get_bytes(archive_mod.period_key(PERIOD)))
+    before_count = int(before.get("run_count", 0))
+
     again = await call(client, "publish_pack", run_id=run_id, period=PERIOD, artifacts=[WORKBOOK, DECK])
     grants = {u["filename"]: u["url"] for u in again["uploads"]}
     for name in (WORKBOOK, DECK):
@@ -522,6 +618,33 @@ async def check_republish(
         "and the second ledger still says complete",
         second["phase"] == "archived" and second["ledger_key"] == first["ledger_key"],
         second["phase"],
+    )
+
+    # The period index is overwritten rather than appended to, so run_count and supersedes
+    # are the only record inside the object that a period was published more than once.
+    # Republishing under the same run id is the awkward case and is why supersedes is read
+    # for presence rather than for a different value: it is legitimately the same id.
+    #
+    # The increment, never the absolute value. Every seed publishes the same period into the
+    # same LocalArchive — this harness does not isolate the archive per seed the way
+    # check_ledger.py does — so by seed 9015 the count is in the thirties. Pinning it to 2
+    # passed on seed 42 alone and failed on the full run, which is a harness bug that reads
+    # exactly like a real one.
+    pointer = json.loads(store.get_bytes(archive_mod.period_key(PERIOD)))
+    checks.add(
+        "republishing advances the period's run_count rather than resetting it",
+        pointer.get("run_count") == before_count + 1,
+        f"run_count {before_count} -> {pointer.get('run_count')}",
+    )
+    checks.add(
+        "and records what it superseded, even when that was itself",
+        pointer.get("supersedes") == run_id,
+        str(pointer.get("supersedes")),
+    )
+    checks.add(
+        "and the digest did not move, because no input did",
+        pointer.get("figures_digest") == first["figures_digest"],
+        str(pointer.get("figures_digest")),
     )
 
 
@@ -587,7 +710,8 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks, workdir: 
 
         check_archived_objects(archived["archived"], store, run_id, files, checks)
         lines = check_run_log(store, run_id, decoy_run_id, archived["tool_calls_archived"], checks)
-        check_ledger(store, run_id, lines, checks)
+        ledger = check_ledger(store, run_id, lines, checks)
+        check_period_pointer(store, run_id, ledger, checks)
 
         await check_republish(client, store, run_id, files, archived, checks)
 

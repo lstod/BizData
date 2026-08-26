@@ -6,11 +6,22 @@ server runs against S3, and a write layer that only knows how to be one of those
 rewrite the first time it meets the other. One protocol, two backends, chosen by
 ``BIZDATA_ARCHIVE_BACKEND``.
 
-Three operations, and deliberately no more. ``presign_put`` mints a time-limited grant to
+Four operations, and deliberately no more. ``presign_put`` mints a time-limited grant to
 write exactly one key; ``head`` says whether a key is there and how big; ``put_bytes``
-writes the two objects the *server* owns. There is no delete, no list and no read of an
-artifact's contents, because nothing in this system needs them and every one of them would
-widen the IAM statement.
+writes the objects the *server* owns; ``get_bytes`` reads back one of them. There is still
+no delete and no list, because nothing needs them and both would widen the IAM statement.
+
+``get_bytes`` arrived at step 12 and is the one that looks like it should have. It does
+not: ``s3:GetObject`` on ``runs/*`` has been granted since step 9, because HeadObject is
+authorised as GetObject and ``head`` is how ``publish_pack`` checks that the artifacts it
+is about to vouch for arrived. So the run ledger became readable without a single line of
+Terraform moving, which is why step 12 has no ``infra/`` change. The read is also narrow in
+the way that matters: the only caller is ``get_run_ledger``, and the only thing it reads is
+the period pointer the server itself wrote.
+
+A missing key is a ``None``, never an exception. A period nobody has run yet *is* a missing
+key, and it has to read as "first run" rather than as a failure — the same rule ``head``
+already follows, and for the same reason.
 
 The split matters and is the design of step 9. The agent produces the workbook and the
 deck, so it gets a presigned URL for each — a credential that can write one key and then
@@ -43,6 +54,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # IAM statement is scoped to. Key confinement is therefore enforced twice: once here, where
 # the key is built, and once in IAM, where a key built wrongly would still be refused.
 DEFAULT_PREFIX = "runs"
+
+# Step 12's index: one object per period, holding the run that last covered it. Under the
+# same prefix, so the existing IAM statements reach it and nothing in infra/ moves.
+#
+# The leading underscore is a fence rather than a convention. A run's objects are keyed
+# runs/<run_id>/<filename>, and RUN_ID_RE in server/tools/publish_pack.py requires a run id
+# to begin with a letter or digit — so no run can ever be called "_periods", and no
+# presigned URL handed to an agent can be signed for a key under here. The pointer is
+# reachable only by the server, because the only way in is a key the server built.
+PERIODS_PREFIX = f"{DEFAULT_PREFIX}/_periods"
 
 # Fifteen minutes, from the decision record. Long enough for a sandbox to write two files it
 # already has on disk, short enough that a URL captured from a transcript is worthless by
@@ -93,6 +114,8 @@ class Archive(Protocol):
 
     def put_bytes(self, key: str, data: bytes, content_type: str) -> ObjectInfo: ...
 
+    def get_bytes(self, key: str) -> bytes | None: ...
+
 
 def utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
@@ -100,6 +123,17 @@ def utcnow() -> dt.datetime:
 
 def content_type_for(filename: str) -> str:
     return CONTENT_TYPES.get(Path(filename).suffix.lower(), "application/octet-stream")
+
+
+def period_key(period_label: str) -> str:
+    """The pointer key for one period, built here so both callers build it identically.
+
+    ``publish_pack`` writes it and ``get_run_ledger`` reads it, and a key assembled twice
+    is a key that can be assembled two ways. ``period_label`` is always the output of
+    ``server.tools.common.as_period_start`` formatted ``%Y-%m``, so it is four digits, a
+    hyphen and two digits by construction and never a caller's string.
+    """
+    return f"{PERIODS_PREFIX}/{period_label}.json"
 
 
 # ------------------------------------------------------------------------------------ S3
@@ -189,6 +223,40 @@ class S3Archive:
             raise ArchiveError(f"put s3://{self.bucket}/{key} failed: {exc}") from exc
         return ObjectInfo(key=key, size_bytes=len(data), etag=hashlib.md5(data).hexdigest())
 
+    def get_bytes(self, key: str) -> bytes | None:
+        """Read one key back, or ``None`` if it is not there.
+
+        This is the one place S3's error model has to be met head on. A caller **without**
+        ``s3:ListBucket`` gets ``403 AccessDenied`` for a key that does not exist, not
+        ``404 NoSuchKey`` — S3 refuses to confirm absence to anyone who is not allowed to
+        enumerate, so the two answers are deliberately indistinguishable from outside.
+
+        This role does not have ``ListBucket``, and it is not getting it. Granting it is
+        the obvious way to make 404 mean 404, and it would cost the property step 9's IAM
+        comment names: no enumeration of other runs. A prefix condition does not help,
+        because the existence check evaluates ``ListBucket`` with no ``s3:prefix`` in
+        context, so a conditioned grant is denied and the answer is 403 again.
+
+        So both are read as absent, and the reason that is safe here rather than sloppy is
+        that the permission is not in question: the same policy document that grants
+        ``PutObject`` on ``runs/*`` grants ``GetObject`` on ``runs/*``, and the only key
+        this method is ever called with is one the server itself wrote under that prefix.
+        A denial that is not an absence would mean the policy had been changed underneath
+        the function, which is a deploy-time fact rather than a runtime one.
+
+        Left unhandled this is the sharpest local-versus-deployed split in the build:
+        LocalArchive returns None for a missing file, so a first run on a period passes
+        every seeded harness and raises on Lambda. scripts/check_archive.py asserts the
+        real behaviour against the real bucket, which is the only place it can be proven.
+        """
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+        except Exception as exc:
+            if _is_not_found(exc) or _is_denied(exc):
+                return None
+            raise ArchiveError(f"get s3://{self.bucket}/{key} failed: {exc}") from exc
+        return bytes(response["Body"].read())
+
 
 def _is_not_found(exc: Exception) -> bool:
     """A 404 from head_object, without importing botocore to find out.
@@ -202,6 +270,21 @@ def _is_not_found(exc: Exception) -> bool:
         return False
     status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     return status == 404 or response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound")
+
+
+def _is_denied(exc: Exception) -> bool:
+    """A 403 from S3, which for a reader without ListBucket is also how absence looks.
+
+    Kept separate from ``_is_not_found`` on purpose. ``head`` still treats a 403 as a real
+    error, because there it would mean the server could not verify an artifact it is about
+    to vouch for and saying "it did not arrive" would be a lie. Only ``get_bytes`` accepts
+    it as absence, and only for a key under a prefix this role provably holds GetObject on.
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        return False
+    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return status == 403 or response.get("Error", {}).get("Code") in ("403", "AccessDenied")
 
 
 # --------------------------------------------------------------------------------- local
@@ -280,6 +363,18 @@ class LocalArchive:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         return ObjectInfo(key=key, size_bytes=len(data), etag=hashlib.md5(data).hexdigest())
+
+    def get_bytes(self, key: str) -> bytes | None:
+        """A missing file is None, which is the one thing this backend gets right for free.
+
+        Worth naming what it therefore cannot prove. S3 answers a missing key with 403
+        rather than 404 for a reader without ListBucket, and ``S3Archive.get_bytes`` folds
+        both into None to survive it. A directory has no such distinction to make, so every
+        assertion in scripts/check_ledger.py about a period that has never run passes here
+        whether or not that fold exists. scripts/check_archive.py is where it is real.
+        """
+        path = self._path(key)
+        return path.read_bytes() if path.is_file() else None
 
 
 # ------------------------------------------------------------------------------ selection

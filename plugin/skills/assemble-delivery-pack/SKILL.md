@@ -3,9 +3,11 @@ name: assemble-delivery-pack
 description: >
   This skill should be used when assembling the monthly delivery and margin review pack for a
   professional services portfolio: the engagement book workbook and the figures behind it. It
-  covers which engagements to examine, the order the data is gathered in, the reporting-coverage
-  check that runs before any analysis, and how engagement-book-YYYY-MM.xlsx is produced. Use it
-  whenever a monthly delivery review, engagement book, delivery pack or partner pack is asked for.
+  covers the run-ledger check that decides whether the period should be rebuilt at all, which
+  engagements to examine, the order the data is gathered in, the reporting-coverage check that
+  runs before any analysis, how late-arriving time is reported, and how engagement-book-YYYY-MM.xlsx
+  is produced. Use it whenever a monthly delivery review, engagement book, delivery pack or
+  partner pack is asked for, and whenever the review runs on a schedule.
 ---
 
 # Assembling the monthly delivery pack
@@ -21,6 +23,26 @@ happens **before** any analysis, and the engagements to examine are chosen on **
 rather than the obvious two.
 
 ## Order of operations
+
+**0. Ask whether this period has already been done.**
+
+```
+get_run_ledger(period="<YYYY-MM>")
+```
+
+First call of every run, before anything else, and it costs one call. It reads the archive's
+ledger for the period and compares it against the data as it stands now, returning one of
+three decisions:
+
+- **`first_run`** — nothing has published this period. Continue to step 1.
+- **`unchanged`** — a pack exists and not one input has moved since. **Stop.** Report the
+  existing pack at `prior_run.prefix` and the run id that produced it. Do not build a second
+  one; it would be the same figures under a new name, and two packs for one month is how two
+  versions of last month's margin start circulating.
+- **`changed`** — a pack exists and the figures have moved. **Stop and report before doing
+  anything else.** See *When a period has changed* below.
+
+Pass the same `run_id` from here on, so the whole run reconstructs as one piece of work.
 
 **1. List the portfolio.**
 
@@ -109,6 +131,40 @@ python scripts/classify.py pack.json --out pack.json
 See *Producing the pack*. The format of both is `house-format`'s: the five tabs, the live
 formulas, the eight slides and the voice all live there, and this skill does not restate them.
 
+## When a period has changed
+
+`changed` means a pack exists for this period and the inputs behind it have moved. The
+decision to rebuild is the user's, not yours. Report, then ask.
+
+Report these, in this order:
+
+1. **What moved.** `change_summary` says it in one line — how many entries arrived, or were
+   removed, or whether a record was amended in place. Use it.
+2. **Which entries.** `late_arrivals` names them: who filed, against which engagement, for
+   which day, and when it arrived. List them. "Three entries arrived after the period
+   closed, here they are" is the useful sentence; "the data has changed" is not.
+3. **Which pack exists already** — `prior_run.run_id` and `prior_run.prefix`.
+
+Two flags on each arrival, and they mean different things:
+
+- **`filed_after_period_close`** — the ordinary late timesheet. Work in the period, filed
+  after it ended.
+- **`backdated`** — dated *before* this period and only just filed. It still changes this
+  period's deck, because `hours_to_date` and the burn percentage are cumulative. Say so;
+  a reader who sees a March date on an August review will otherwise assume it is noise.
+
+**`arrivals_complete: false` means the list is not the whole story, and you must say so.**
+The watermark is the latest moment anything was filed, so an entry filed with an *earlier*
+timestamp changes the figures without appearing in `late_arrivals` — as does an amendment
+or a deletion, neither of which is an arrival at all. When this flag is false, report
+`entries_added` alongside the list and state plainly that some of the change could not be
+itemised. Do not present a partial list as complete, and do not conclude from an empty list
+that nothing happened.
+
+Only once the user has said to go ahead: **use a new run id.** Never republish under the old
+one — the archived tool-call log is gathered by filtering on the run id, so a reused id
+merges both runs into one file.
+
 ## The coverage rule
 
 This is the rule the pack exists to get right.
@@ -159,8 +215,14 @@ Stop and report rather than producing a pack when:
 - Any tool call fails, or returns a `total_count` inconsistent with a prior call in the same run.
 - More than 20% of the period's entries arrived after the period closed —
   `data_quality.late_entry_pct > 20`. The period is not stable enough to review yet.
-- The run ledger shows this period already produced a pack and the underlying figures have since
-  changed. Report what changed and ask before regenerating.
+- `get_run_ledger` returns `unchanged`. A pack already covers this period and nothing has
+  moved. Report it and stop.
+- `get_run_ledger` returns `changed`. A pack already covers this period and the figures have
+  since moved. Report what changed, as *When a period has changed* sets out, and ask before
+  regenerating.
+- `get_run_ledger` fails, or reports that the period's ledger entry is unreadable. Stop and
+  say so. A run that cannot read the ledger cannot tell a first run from a second one, and
+  guessing wrong publishes a second pack over a partner's first.
 
 A stopped run says which condition tripped and what was seen. It does not produce a partial
 workbook.
@@ -204,6 +266,7 @@ nothing.
   "period": "2026-08",
   "run_id": "delivery-review-2026-08",
   "scoring_model_version": "<the value the tools returned, copied up to the top level>",
+  "run_ledger": "<the whole get_run_ledger response from step 0>",
   "engagements": [ "<every list_engagements row, all pages, in order>" ],
   "portfolio": "<the portfolio block from the first list_engagements call, whole>",
   "time_summary": "<the whole get_time_summary response, including both blocks>",
@@ -228,6 +291,13 @@ returns it, so it is already inside `time_summary`; lifting it to the top level 
 puts it on the workbook's `Summary` tab and the deck's title slide. Both builders fall back to the
 nested copy if it is missing, so a pack without it still renders — but say it once at the top and
 neither builder has to guess. A band is only comparable against the model that produced it.
+
+`run_ledger` is the step 0 response, copied in whole. The workbook reads it for one line on
+the `Data Quality` tab: whether entries arrived since the last run, and how many. It is
+optional and the builder falls back to saying nothing rather than failing, because a pack
+built before this key existed still has to render — but include it, because "three entries
+arrived after the last run" is a line a partner acts on and the alternative is a reviewer
+wondering why this month's figures differ from the copy they were sent.
 
 `burn` and `financials` hold only the engagements chosen at step 4. `portfolio` is copied whole
 from the first `list_engagements` response and is required — the deck refuses to build without

@@ -521,6 +521,54 @@ def build_exceptions(ws: Worksheet, pack: dict[str, Any]) -> None:
     widths(ws, EXCEPTION_COLUMNS, wide={"triggers", "situation", "cause", "recommended_action"})
 
 
+def arrival_notes(pack: dict[str, Any]) -> list[str]:
+    """What arrived since the last run, for the Data notes block. Empty when nothing did.
+
+    Reads pack["run_ledger"], the get_run_ledger response, and returns nothing at all when
+    the key is absent — a pack assembled before step 12 still has to render, and a builder
+    that raised on a missing optional key would break every archived pack.json in the
+    bucket. Every figure here came off the tool response; nothing is counted locally.
+
+    The second note is the one that matters and is the reason this is two sentences rather
+    than one. arrivals_complete is false when the change could not be fully itemised — a
+    row filed below the previous watermark, an amendment, a deletion — and a workbook that
+    printed only the itemised count would understate the change with a precise-looking
+    number. Where the tool cannot be exact, this says so rather than rounding it away.
+    """
+    ledger = pack.get("run_ledger") or {}
+    if ledger.get("decision") != "changed":
+        return []
+
+    notes: list[str] = []
+    arrivals = ledger.get("late_arrivals") or []
+    prior = (ledger.get("prior_run") or {}).get("run_id")
+
+    if arrivals:
+        after_close = sum(1 for a in arrivals if a.get("filed_after_period_close"))
+        backdated = sum(1 for a in arrivals if a.get("backdated"))
+        detail = []
+        if after_close:
+            detail.append(f"{after_close} filed after the period closed")
+        if backdated:
+            detail.append(f"{backdated} dated before this period and only filed now")
+        notes.append(
+            f"{ledger.get('total_count', len(arrivals))} time entries have been filed since "
+            f"the previous pack for this period"
+            + (f" ({prior})" if prior else "")
+            + (f": {', '.join(detail)}." if detail else ".")
+            + " They are included in every figure in this workbook."
+        )
+
+    if ledger.get("arrivals_complete") is False:
+        notes.append(
+            "Not all of the change since the previous pack could be itemised. "
+            + str(ledger.get("change_summary") or "")
+            + " Entries filed with a timestamp earlier than the previous run's, amendments "
+            "to existing records and deletions do not appear in the list above."
+        )
+    return notes
+
+
 def build_data_quality(ws: Worksheet, pack: dict[str, Any]) -> None:
     """The two blocks the tools keep separate, kept separate here too.
 
@@ -578,6 +626,13 @@ def build_data_quality(ws: Worksheet, pack: dict[str, Any]) -> None:
             f"artifact. It is excluded from every run rate and projection in this workbook, and "
             f"delivery for the week cannot be measured from the data."
         )
+        cell = ws.cell(row=row, column=1, value=note)
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.row_dimensions[row].height = 46
+        row += 1
+
+    for note in arrival_notes(pack):
         cell = ws.cell(row=row, column=1, value=note)
         cell.alignment = Alignment(wrap_text=True, vertical="top")
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)

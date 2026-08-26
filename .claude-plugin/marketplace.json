@@ -10,7 +10,7 @@
     {
       "name": "bizdata-delivery-review",
       "source": "./plugin",
-      "description": "The monthly delivery and margin review for a professional services portfolio: assemble the pack, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
+      "description": "The monthly delivery and margin review for a professional services portfolio: check the run ledger before rebuilding a period, assemble the pack, report late-arriving time, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
       "category": "professional-services",
       "tags": [
         "delivery-review",

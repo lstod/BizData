@@ -110,6 +110,15 @@ async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]
             raise AssertionError(f"{tool} returned an error: {text}")
         return result.structured_content
 
+    # 0. The run ledger, before anything else. Added at step 12, and put here rather than
+    #    into a fixture on purpose: check_format.py, check_publish.py and check_escalation.py
+    #    all build their packs through this function, so the shape they assert against is the
+    #    shape the SKILL's own order of operations produces. Step 11's defect survived 427
+    #    assertions a seed precisely because the fixture and the documented process had
+    #    drifted apart, and the way not to repeat that is for the harness to follow the
+    #    document rather than to describe it.
+    ledger = await call("get_run_ledger", period=PERIOD)
+
     # 1. The portfolio, paged to the end. limit=5 rather than 100 so the paging loop is
     #    genuinely exercised on eighteen engagements rather than being one page.
     #    include_portfolio on the first page only: the block is identical on every page, and
@@ -145,6 +154,7 @@ async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]
     return {
         "period": PERIOD,
         "run_id": run_id,
+        "run_ledger": ledger,
         "scoring_model_version": first.get("scoring_model_version"),
         "total_count": first["total_count"],
         "pages": pages,
@@ -316,6 +326,19 @@ def check_workbook(path: Path, pack: dict[str, Any], anchors: dict[str, Any], ch
         str(pack["scoring_model_version"]),
     )
 
+    # ---- the pack carries what step 0 decided on ------------------------------------
+    ledger = pack.get("run_ledger") or {}
+    checks.add(
+        "pack: carries the run_ledger response the SKILL's step 0 produces",
+        ledger.get("decision") in ("first_run", "unchanged", "changed"),
+        str(ledger.get("decision")),
+    )
+    checks.add(
+        "pack: and its digest, so the archived pack records what it was built from",
+        bool(ledger.get("figures_digest")) and ledger.get("period") == PERIOD,
+        str(ledger.get("figures_digest")),
+    )
+
     # ---- Time Detail marks the gap week rather than dropping it ----------------------
     _, detail = sheet_rows(wb["Time Detail"])
     gap_rows = [r for r in detail if str(r.get("week_start")) == gap_week]
@@ -453,6 +476,13 @@ def check_skill_document(checks: Checks) -> None:
         ("no `engagement_ids` argument", "the portfolio-wide coverage call"),
         ("Never compute a percentage", "the no-arithmetic rule"),
         ("Never re-baseline a ceiling", "the ceiling rule"),
+        # Step 12. The stop condition it replaced named a ledger no tool could read, so
+        # these check the instruction is now expressed in something callable.
+        ('get_run_ledger(period="<YYYY-MM>")', "the run-ledger call, in callable form"),
+        ("`first_run`", "what a period with no prior pack returns"),
+        ("`unchanged`", "what an untouched period returns"),
+        ("`arrivals_complete: false`", "the limit of what the watermark can enumerate"),
+        ("use a new run id", "that a regenerated pack does not reuse the run id"),
     ):
         checks.add(f"skill: states {what}", phrase in text, "present" if phrase in text else "absent")
 

@@ -711,6 +711,121 @@ def check_nested_version(pack: dict[str, Any], workdir: Path, checks: Checks) ->
     )
 
 
+def check_arrival_notes(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
+    """Step 12's line on the Data Quality tab, and the pack shape that omits it.
+
+    Three fixtures, and the third is the one that matters. A pack with a `changed` ledger
+    must name what arrived; a pack with no `run_ledger` key at all must still build and say
+    nothing — because every pack.json already in the archive was written before that key
+    existed, and a builder that raised on a missing optional key would break all of them.
+
+    That third case is the step 11 lesson applied rather than restated. The
+    `scoring_model_version` defect survived 427 assertions a seed because the harness
+    fixture had a shape the SKILL never instructed anyone to produce, and the deck's missing
+    fallback was invisible until a real Cowork run hit it. So the absent-key fixture is
+    built by deleting the key, not by declining to add it.
+
+    The `arrivals_complete: false` case is asserted separately from the itemised one. Both
+    render notes, and a builder that printed the count while dropping the caveat would pass
+    a check that only looked for a number.
+    """
+    ledger_changed = {
+        "decision": "changed",
+        "total_count": 3,
+        "entries_added": 3,
+        "arrivals_complete": True,
+        "change_summary": "3 entries filed since, which accounts for all 3 new row(s).",
+        "prior_run": {"run_id": "delivery-review-2026-08-r1"},
+        "late_arrivals": [
+            {
+                "id": 40001, "person_name": "A Person", "engagement_name": "An Engagement",
+                "entry_date": "2026-08-14", "hours": 1.25,
+                "filed_after_period_close": True, "backdated": False,
+            },
+            {
+                "id": 40002, "person_name": "A Person", "engagement_name": "An Engagement",
+                "entry_date": "2026-08-15", "hours": 2.0,
+                "filed_after_period_close": True, "backdated": False,
+            },
+            {
+                "id": 40003, "person_name": "Another Person", "engagement_name": "An Engagement",
+                "entry_date": "2026-07-30", "hours": 0.5,
+                "filed_after_period_close": False, "backdated": True,
+            },
+        ],
+    }
+
+    def notes_for(label: str, ledger: dict[str, Any] | None) -> list[str]:
+        fixture = copy.deepcopy(pack)
+        if ledger is None:
+            fixture.pop("run_ledger", None)
+        else:
+            fixture["run_ledger"] = ledger
+        path = workdir / f"pack-arrivals-{label}.json"
+        path.write_text(json.dumps(fixture, default=str, indent=2))
+        out = workdir / f"book-arrivals-{label}.xlsx"
+        built = subprocess.run(
+            [sys.executable, str(BUILDER), str(path), "--out", str(out)],
+            capture_output=True, text=True,
+        )
+        if built.returncode != 0 or not out.exists():
+            checks.add(f"workbook: the {label} pack builds", False, built.stderr.strip()[:110])
+            return []
+        ws = load_workbook(out)["Data Quality"]
+        return [str(c.value) for row in ws.iter_rows() for c in row if c.value is not None]
+
+    values = notes_for("changed", ledger_changed)
+    joined = " ".join(values)
+    checks.add(
+        "workbook: Data Quality names how many entries arrived since the previous pack",
+        "3 time entries have been filed since the previous pack" in joined,
+        next((v[:80] for v in values if "filed since" in v), "no arrival note"),
+    )
+    checks.add(
+        "and splits them into filed-late and backdated, which are different findings",
+        "2 filed after the period closed" in joined and "1 dated before this period" in joined,
+        next((v[:96] for v in values if "filed since" in v), "no arrival note"),
+    )
+    checks.add(
+        "and names the pack it is comparing against",
+        "delivery-review-2026-08-r1" in joined,
+        "prior run id present" if "delivery-review-2026-08-r1" in joined else "absent",
+    )
+
+    incomplete = copy.deepcopy(ledger_changed)
+    incomplete.update(
+        arrivals_complete=False,
+        late_arrivals=[],
+        total_count=0,
+        change_summary="3 entries added, of which only 0 arrived after the previous watermark.",
+    )
+    partial = " ".join(notes_for("incomplete", incomplete))
+    checks.add(
+        "workbook: a change that could not be itemised is reported as such, not omitted",
+        "Not all of the change" in partial and "could be itemised" in partial,
+        partial[:96] if "could be itemised" in partial else "no caveat note",
+    )
+    checks.add(
+        "and does not print an arrival count it cannot stand behind",
+        "time entries have been filed since" not in partial,
+        "no count claimed" if "time entries have been filed since" not in partial else "claimed one",
+    )
+
+    # The fixture made worse on purpose. Every archived pack.json predates this key.
+    absent = " ".join(notes_for("absent", None))
+    checks.add(
+        "workbook: a pack with no run_ledger key still builds and says nothing about arrivals",
+        bool(absent) and "filed since the previous pack" not in absent,
+        "renders, no arrival note" if absent else "did not build",
+    )
+    checks.add(
+        "and an unchanged period says nothing either, having nothing to report",
+        "filed since the previous pack"
+        not in " ".join(notes_for("unchanged", {"decision": "unchanged", "late_arrivals": []})),
+        "silent",
+    )
+
+
 def check_deck_refusals(pack: dict[str, Any], workdir: Path, checks: Checks) -> None:
     """The deck refuses a pack it cannot build honestly, rather than filling the gap.
 
@@ -822,6 +937,7 @@ async def run_seed(seed: int, anchors: dict[str, Any], checks: Checks, workdir: 
     check_clean_period(pack, workdir, checks)
     check_red_slide_cap(pack, workdir, checks)
     check_nested_version(pack, workdir, checks)
+    check_arrival_notes(pack, workdir, checks)
     check_deck_refusals(pack, workdir, checks)
 
 

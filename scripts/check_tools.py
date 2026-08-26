@@ -50,7 +50,7 @@ from mcp import Client  # noqa: E402
 
 from server import db, toollog  # noqa: E402
 from server.app import mcp  # noqa: E402
-from server.tools import READ_TOOLS, WRITE_TOOLS  # noqa: E402
+from server.tools import READ_TOOLS, RUN_TOOLS, WRITE_TOOLS  # noqa: E402
 from server.tools.get_time_summary import GROUPINGS  # noqa: E402
 
 FIXTURE_SEEDS = (42, 43, *range(9001, 9016))
@@ -75,6 +75,13 @@ EXPECTED_PARAMS = {
     # question — which scoring model is live — so the ledger entry it archives records the
     # model the pack was built under.
     "scoring_model_version": set(),
+    # Step 12's two. period_watermark binds period_end alone and deliberately not
+    # period_start: its scope is cumulative to the end of the period, because hours_to_date
+    # is cumulative and an entry backdated into an earlier month still moves this period's
+    # burn. Binding a period_start it did not use would fail check_params, which is the
+    # mechanism that would have caught the scope being narrowed by accident.
+    "period_watermark": {"period_end"},
+    "period_late_arrivals": {"period_start", "period_end", "since"},
 }
 
 
@@ -273,26 +280,42 @@ def check_published_schemas(tools: Any, checks: Checks) -> dict[str, dict[str, A
         "get_engagement_burn": {"engagement_id", "as_of_date", "run_id"},
         "get_time_summary": {"period_start", "period_end", "group_by", "engagement_ids", "run_id"},
         "get_financials": {"engagement_id", "period", "run_id"},
+        "get_run_ledger": {"period", "run_id"},
         "publish_pack": {"run_id", "period", "artifacts", "finalize"},
     }
     published = {t.name: t for t in tools.tools}
+    run_names = {t.__name__ for t in RUN_TOOLS}
 
-    # The cap is on the read surface, so it is asserted on the read surface. Step 9 added a
-    # fifth tool and the interesting condition is not "how many are there" but "did an action
-    # get counted as a read", which the two assertions below can tell apart and a single
-    # count could not.
+    # The cap is on the read surface, so it is asserted on the read surface. Steps 9 and 12
+    # each added a tool outside it, and the interesting condition is not "how many are
+    # there" but "did something that brackets a run get counted as a way to query the data",
+    # which these assertions can tell apart and a single count could not.
     checks.add(
         "tools/list publishes exactly the four read tools",
-        {t.__name__ for t in READ_TOOLS} == set(published) - {"publish_pack"},
-        ", ".join(sorted(set(published) - {"publish_pack"})),
+        {t.__name__ for t in READ_TOOLS} == set(published) - run_names,
+        ", ".join(sorted(set(published) - run_names)),
     )
     checks.add(
-        "and one write tool, kept out of the read surface",
-        {t.__name__ for t in WRITE_TOOLS} == {"publish_pack"} and "publish_pack" in published,
+        "and two run tools, kept out of the read surface",
+        run_names == {"get_run_ledger", "publish_pack"} and run_names <= set(published),
+        ", ".join(sorted(run_names)),
+    )
+    # The read surface is four and has to stay four. Stated as its own number rather than
+    # left to be inferred from the set comparison above, because the failure this guards
+    # against is a sixth tool that answers a question about an engagement being waved
+    # through as "run lifecycle" — and a set comparison passes if both sides move together.
+    checks.add(
+        "the read surface is still four tools",
+        len(READ_TOOLS) == 4,
+        f"{len(READ_TOOLS)} read, {len(run_names)} run",
+    )
+    checks.add(
+        "and exactly one of them can write",
+        {t.__name__ for t in WRITE_TOOLS} == {"publish_pack"},
         ", ".join(sorted(t.__name__ for t in WRITE_TOOLS)),
     )
     checks.add(
-        "tools/list publishes nothing beyond those five",
+        "tools/list publishes nothing beyond those six",
         set(published) == set(expected_inputs),
         ", ".join(sorted(published)),
     )

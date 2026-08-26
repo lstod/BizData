@@ -45,6 +45,21 @@ a future change that widens the grant fails the bootstrap instead of passing qui
 `publish_pack` is the one write path in the build, and it writes to an S3 archive rather than to the
 database. It reads no business data.
 
+Step 12 is where that constraint was tested rather than restated. It called for a `run_ledger` table,
+and building one would have meant a second database role, a second secret, a write path through
+`server/db.py`, and an asterisk on the three layers above. The ledger is a per-period object in S3
+instead — `runs/_periods/YYYY-MM.json` — which the server already had permission to write and to
+read. **No IAM statement was widened and there is no `infra/` change in that step.** `s3:GetObject`
+on `runs/*` has been granted since step 9, because HeadObject is authorised as GetObject and `head`
+is how `publish_pack` verifies an artifact arrived before vouching for it.
+
+The archive still has no `DeleteObject` and no `ListBucket`, and the second of those has a visible
+cost that is worth paying. Without `ListBucket`, S3 answers a request for a key that does not exist
+with `403 AccessDenied` rather than `404 NoSuchKey` — it will not confirm absence to a caller that
+cannot enumerate. So `server/archive.py` reads both as "not there" for this one prefix, and the
+narrower grant is kept over the cleaner error. `scripts/check_archive.py` proves that path against
+the real bucket, through the deployed role, because no local backend can model it.
+
 **The endpoint requires a Cognito access token, and the checks are specific.** `server/auth.py` is
 about sixty lines because the MCP v2 SDK is already a resource server; what it adds is the claim
 validation, and each check closes a hole that is invisible when it is missing:

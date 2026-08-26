@@ -2,8 +2,8 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "bizdata-delivery-review",
   "displayName": "BizData delivery review",
-  "version": "1.0.1",
-  "description": "The monthly delivery and margin review for a professional services portfolio: assemble the pack, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
+  "version": "1.0.2",
+  "description": "The monthly delivery and margin review for a professional services portfolio: check the run ledger before rebuilding a period, assemble the pack, report late-arriving time, hold the house format, and escalate scope without deciding it. Reads from the BizData MCP connector.",
   "author": {
     "name": "BizData"
   },
