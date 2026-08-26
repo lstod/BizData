@@ -259,10 +259,17 @@ def main(argv: list[str] | None = None) -> int:
     payload = json.loads(body or b"{}")
     tools = payload.get("result", {}).get("tools", [])
     names = {t.get("name") for t in tools}
-    checks.add("a valid token is accepted", status == 200 and len(tools) == 5, f"HTTP {status}, {len(tools)} tools")
+    checks.add("a valid token is accepted", status == 200 and len(tools) == 6, f"HTTP {status}, {len(tools)} tools")
+    # Named literally rather than imported from server.tools, because the question here is
+    # what the *deployment* publishes. Importing the set the local checkout defines would
+    # make this assertion agree with itself across a stale deploy, which is exactly the
+    # failure check_deployment_is_current below exists to catch.
     checks.add(
-        "the deployed surface is the four read tools and publish_pack",
-        names == {"list_engagements", "get_engagement_burn", "get_time_summary", "get_financials", "publish_pack"},
+        "the deployed surface is the four read tools, get_run_ledger and publish_pack",
+        names == {
+            "list_engagements", "get_engagement_burn", "get_time_summary", "get_financials",
+            "get_run_ledger", "publish_pack",
+        },
         ", ".join(sorted(str(n) for n in names)),
     )
 
