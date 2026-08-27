@@ -9,12 +9,13 @@ with different numbers, and flag whatever is going sideways before it becomes a
 surprise. One person owns the spreadsheet and knows how it works.
 
 This repository is the data layer and the MCP server behind that, plus the Skills that
-assemble the pack. **Build in progress** — steps 0 through 11 and 14 of 14 are done. The server is
+assemble the pack. **All 14 steps are done.** The server is
 deployed on AWS behind Cognito and answering tool calls from a Cowork connector; the Skills
 produce the engagement book and the partner deck, to a format that does not vary; a finished pack
-lands in an S3 archive of record with its tool-call log and ledger beside it; and the whole thing
-installs as a plugin from this repository, which is its own marketplace. What remains is the
-scheduling work and the subagent fan-out, both additive.
+lands in an S3 archive of record with its tool-call log and ledger beside it; a run ledger makes
+re-running a period a decision rather than an accident; the engagements chosen for a proper look
+are examined in parallel; and the whole thing installs as a plugin from this repository, which is
+its own marketplace.
 
 The security posture is in [SECURITY.md](SECURITY.md). What went wrong is further down, under
 [what broke](#what-broke), and it is the part worth reading.
@@ -49,7 +50,7 @@ Seven decisions, and what each one is not:
 | Lambda behind the Web Adapter | A long-running container | The same ASGI app runs under `uvicorn` locally and on Lambda deployed, with no code change. A review that runs monthly should not be paying for a container the other 30 days |
 | Stateless MCP | Session affinity | Stateless since the `2026-07-28` revision, so any request can land on any cold instance. Scale-to-zero is the natural shape now, not a workaround |
 | Health as a score computed in SQL from a versioned weights table | Thresholds in a prompt | Changing a weight and re-running the harness turns a judgment call into a measurable regression. Weights are data, so it needs no redeploy |
-| One triage call carrying every dimension the triage rule may mention | A fan-out of detail calls | Triage costs one call instead of thirty. This one was learned three times — see [what broke](#what-broke) |
+| One triage call carrying every dimension the triage rule may mention | A fan-out of detail calls | Triage costs one call instead of thirty. This one was learned three times — see [what broke](#what-broke). It is a rule about *choosing* what to examine: the engagements triage has already chosen are then examined in parallel, which is step 13 and a different question |
 | Read-only enforced by a database grant | Read-only enforced by the server's code | The server could be rewritten tomorrow to issue an `UPDATE` and it would still fail. `scripts/bootstrap_aurora.py` attempts a write on every run and records the refusal, so a change that widens the grant breaks the bootstrap rather than passing quietly |
 
 Two backends sit behind one interface in `server/db.py`, chosen by `BIZDATA_DB_BACKEND`: `psycopg`
@@ -387,6 +388,12 @@ nothing visible.
 proper look therefore cost a fan-out of thirty `get_engagement_burn` calls — the tool answered
 "which engagements exist," when the question was "which ones should I look at." `burn_pct` and the
 health band moved into SQL and onto the triage row, and triage went from thirty calls to one.
+
+Step 13 later added a fan-out of detail calls, which sounds like a reversal and is not: it examines
+the engagements triage has *already chosen*, in parallel, and triage is still one call. The rule
+underneath both is the same — never call a tool to learn something the triage row already carries.
+`docs/notes/step-13-fanout.md` draws the line; `plugin/skills/assemble-delivery-pack/SKILL.md` step
+4a states it where a future edit would otherwise read the new section as permission.
 
 Then the same mistake, twice more, in a form that was harder to see:
 

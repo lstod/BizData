@@ -1,0 +1,232 @@
+Step 13 -- the recorded single-threaded baseline, and the fan-out measured against it
+Captured 2026-08-26, seed 42, period 2026-08, at f4ff523 plus step 13's changes.
+
+    scripts/bench_fanout.py --seed 42 --repeat 3 --probe -v
+    BIZDATA_ARCHIVE_BACKEND=s3 scripts/bench_fanout.py --backend aws --no-reseed \
+        --seed 42 --repeat 3 --probe -v
+
+Both modes drive check_pack.gather(), which is the SKILL's order of operations followed
+exactly. The only difference between them is the `concurrency` argument: 1 runs the detail
+leg as twenty serial awaits, 8 runs it as ten two-call legs behind a semaphore. Nothing
+else in the run changes, and neither mode publishes.
+
+The shape of a run, both modes, every time: 18 active engagements, 10 meeting a trigger,
+26 tool calls. One get_run_ledger, four list_engagements (limit=5, so the paging loop is
+genuinely exercised), one portfolio-wide get_time_summary, then ten get_engagement_burn
+and ten get_financials. Twenty of the twenty-six are the detail leg. Six are not, and that
+turns out to be the whole story about the ceiling -- see the sweep.
+
+The data state was left alone for all of it. Aurora already held the three demo rows from
+step 12 (ids 40001-40003, filed 2026-08-20), so 2026-08 read `changed` against the
+`check-archive` pack of 2026-08-26 02:25:59, with arrivals_complete false. Nothing was
+inserted and nothing was removed for step 13. Every run below saw the same decision, which
+assertion 5 checks rather than assumes: a publish between the two modes would move the
+period to `unchanged`, which changes the Data Quality tab and would read as a fan-out
+defect.
+
+
+================================================================================
+1. LOCAL POSTGRES -- the baseline, and the Done-when
+================================================================================
+
+seed 42, backend local, 10 of 18 engagements examined, 26 tool calls per run
+
+                  wall clock   handler time   calls
+  sequential #1        2.45s          2.29s      26
+  sequential #2        2.43s          2.29s      26
+  sequential #3        2.50s          2.32s      26
+  fan-out #1           1.45s          3.03s      26
+  fan-out #2           1.49s          3.09s      26
+  fan-out #3           1.54s          3.06s      26
+
+  median seq           2.45s
+  median par           1.49s   at concurrency 8
+  speedup              1.64x
+
+  transport control: 8 x pg_sleep(0.5)
+  concurrent           0.56s
+  sequential           4.22s   7.5x
+  the path overlaps; anything flat above this line is capacity, not serialisation
+
+seed 42
+     ok  assertion                                                                  detail
+  1  t   the detail leg is wide enough for fan-out to mean anything                 10 engagements examined
+  2  t   both modes made the same number of tool calls                              26 sequential, 26 parallel
+  3  t   the tool-call multiset is identical: same tools, same arguments, same coun 26 distinct calls, all matched
+  4  t   the fan-out's handlers did at least as much work, so nothing was skipped   2.32s sequential, 3.06s parallel, 1.32x -- contention cost, and it is smaller than the saving
+  5  t   every run saw the same run-ledger decision, so nothing published between t decision first_run throughout
+  6  t   sequential wall clock is at or above its own summed handler time, as a con 2.50s wall against 2.32s of handlers
+  7  t   parallel wall clock is below its own summed handler time, which needs over 1.54s wall against 3.06s of handlers
+  8  t   run time drops against the recorded single-threaded baseline               2.45s to 1.49s, 1.64x
+  9  t   the packs are equal once run ids are stripped at every depth               identical
+ 10  t   both workbooks built                                                       engagement-book-2026-08-sequential.xlsx, engagement-book-2026-08-parallel.xlsx
+ 11  t   the run id is the only cell that differs before it is accounted for        Summary!B3: 'fanout-seq-3' vs 'fanout-par-3'
+ 12  t   the workbook is identical to the sequential version, cell by cell          no differences across five tabs, formulas compared as text
+seed 42: 12 of 12 assertions passed
+
+Note assertion 7, which is the one that proves overlap rather than suggesting it. latency_ms
+is measured inside each handler, so a run whose wall clock is below the sum of its own
+handler times must have had handlers running at the same time. 1.54s of wall against 3.06s
+of handlers is not a fast run, it is two runs at once. Assertion 6 is the control: the
+sequential run's wall clock sits above its own sum, as it must.
+
+Note also assertion 4. Handler time goes UP under fan-out, by 32% here. That is contention,
+it is real, and it is the cost being traded for the wall clock. The check is a floor rather
+than a tolerance: contention can only add time, so a parallel run whose handlers took
+materially LESS time did less work, and that is the failure worth catching. What "the same
+work" actually rests on is assertion 3, which compares the call multiset out of the
+tool-call log -- every tool, every argument, counted -- and is exact.
+
+
+================================================================================
+2. AURORA, AS DEPLOYED (max_capacity 1.0 ACU) -- the fan-out does not show up
+================================================================================
+
+seed 42, backend aws, 10 of 18 engagements examined, 26 tool calls per run
+
+                  wall clock   handler time   calls
+  sequential #1        4.71s          4.53s      26
+  sequential #2        5.07s          4.97s      26
+  sequential #3        4.83s          4.64s      26
+  fan-out #1           4.50s         16.45s      26
+  fan-out #2           4.28s         17.82s      26
+  fan-out #3           4.82s         19.23s      26
+
+  median seq           4.83s
+  median par           4.50s   at concurrency 8
+  speedup              1.07x
+
+  transport control: 8 x pg_sleep(0.5)
+  concurrent           0.58s
+  sequential           4.67s   8.0x
+  the path overlaps; anything flat above this line is capacity, not serialisation
+
+seed 42: 12 of 12 assertions passed
+
+1.07x. Handler time nearly quadrupled -- 4.64s to 19.23s -- while the wall clock did not
+move. Each call absorbed almost exactly the queueing delay of the calls beside it, which is
+the signature of work arriving at something that can only do one thing at a time.
+
+The interesting question is what. Two causes look identical from outside and have opposite
+implications: a path that cannot run two calls at once, which would be a defect in this
+design, or a database with no spare CPU, which is a line item. The pg_sleep control
+separates them, because pg_sleep holds a connection without consuming any CPU:
+
+    8 concurrent sleeps of 0.5s finished in 0.58s, against 4.67s sequential. 8.0x.
+
+So the path overlaps perfectly. The shared boto3 client, the RDS Data API, anyio's worker
+threads and the MCP dispatcher are all fine -- the SDK spawns tools/call into its task group
+(only `initialize` is inline) and runs synchronous handlers through anyio.to_thread. Nothing
+in the chain serialises.
+
+What is left is the cluster:
+
+    "MinCapacity": 0.0,
+    "MaxCapacity": 1.0,
+    "SecondsUntilAutoPause": 86400
+
+One ACU. The queries are CPU-bound and there is roughly a quarter of a vCPU to run them on,
+so eight of them at once is eight of them in a queue. The fan-out was working the whole
+time; there was nothing to fan out onto.
+
+
+================================================================================
+3. AURORA AT max_capacity 8.0 -- the same code, the same run, more cluster
+================================================================================
+
+Raised with `terraform -chdir=infra/main apply -target=aws_rds_cluster.main -var
+max_capacity=8`, measured, and reverted to 1.0 immediately afterwards. min_capacity stays 0
+throughout, so the cluster still pauses. One variable, no code change, no redeploy.
+
+seed 42, backend aws, 10 of 18 engagements examined, 26 tool calls per run
+
+                  wall clock   handler time   calls
+  sequential #1        4.12s          4.00s      26
+  sequential #2        4.16s          4.05s      26
+  sequential #3        4.16s          4.01s      26
+  fan-out #1           2.87s          7.90s      26
+  fan-out #2           2.77s          6.83s      26
+  fan-out #3           2.86s          7.03s      26
+
+  median seq           4.16s
+  median par           2.86s   at concurrency 8
+  speedup              1.45x
+
+  transport control: 8 x pg_sleep(0.5)
+  concurrent           0.58s
+  sequential           4.24s   7.3x
+
+seed 42: 12 of 12 assertions passed
+
+1.07x to 1.45x on a Terraform variable. Contention fell from 4.1x to 1.75x on the same
+eight-way fan-out, which is the same fact from the other side: the queue got shorter because
+there was somewhere for the work to go.
+
+Worth being precise about what this does and does not say. It does not say the deployed
+posture is wrong. 1 ACU is the right size for a review that runs monthly and is idle the
+other thirty days, and the whole cost argument in the README depends on it. It says the
+fan-out's benefit is bounded by cluster capacity rather than by the design, that the two are
+separable, and that moving between them is one variable and no code.
+
+
+================================================================================
+4. THE CEILING, AND WHY IT IS NOT CONCURRENCY
+================================================================================
+
+Concurrency swept on both backends, median of one run each:
+
+    local Postgres                      Aurora at 8 ACU
+    c=2    2.50s -> 1.87s   1.34x       c=2    4.26s -> 3.08s   1.38x
+    c=4    2.48s -> 1.60s   1.55x       c=4    4.11s -> 2.92s   1.41x
+    c=8    2.51s -> 1.54s   1.63x       c=8    4.13s -> 3.28s   1.26x
+    c=16   2.46s -> 1.48s   1.67x       c=16   4.14s -> 2.91s   1.42x
+
+It plateaus by four, and doubling again buys nothing. That is not a capacity limit and not a
+tuning failure -- it is Amdahl's law meeting the line drawn in this step.
+
+Only twenty of the twenty-six calls are in the fan-out. The other six are the run ledger,
+four pages of list_engagements and the portfolio-wide get_time_summary, and every one of
+them is sequential *by design*: the ledger decides whether the run should happen at all, the
+portfolio has to be complete before anything is chosen, and the coverage call is deliberately
+unscoped because a subset-scoped version measures a different quantity. Those six are also
+the expensive ones -- list_engagements computes the whole health view. Perfect fan-out of the
+remaining twenty leaves the six untouched, and the six are most of the run.
+
+So the measured ceiling is a direct consequence of where the line was drawn, and it is worth
+saying plainly: the sequential part is sequential because it must be, not because it was not
+got to. Widening the fan-out to cover triage would beat this number and produce a pack that
+cannot be trusted -- which is the thing this repo has now learned three times, and the reason
+SKILL.md step 4a says out loud that it is not the fan-out step 4 warns about.
+
+
+================================================================================
+5. THAT IT IS THE SAME PACK
+================================================================================
+
+Asserted three ways, on every run above.
+
+The call multiset (assertion 3), out of the tool-call log rather than out of the harness's
+intentions: same tools, same arguments, same counts, order deliberately discarded because
+order is the one thing fan-out is supposed to change.
+
+The pack (assertion 9), compared after stripping run_id recursively. Recursively matters:
+every tool response carries its own run_id from the base Response model in
+server/tools/common.py, so a top-level strip leaves a dozen nested differences that mean
+nothing. The two dicts key in `chosen` order at any concurrency because asyncio.gather
+returns in the order it was given, so completion order never leaks into the file.
+
+The workbook (assertions 11 and 12), cell by cell. Not a checksum: build_workbook.py opens a
+bare Workbook() and openpyxl stamps dcterms:created and current zip mtimes, so two
+byte-different files are the normal result of one unchanged pack. check_pack.compare_workbooks
+loads without data_only -- so the three live columns compare as formula text rather than as
+the None Excel never filled in -- and walks every cell's value and number format across all
+five tabs.
+
+It finds exactly one difference, every time, and it is the right one:
+
+    Summary!B3: 'fanout-seq-3' vs 'fanout-par-3'
+
+The run id, which is two runs' worth of two different run ids and is supposed to differ --
+step 12 requires a regenerated pack to take a new one, so two workbooks carrying the same id
+would be the defect. Asserted in both directions: that it is the only difference before it is
+accounted for, and that renaming it leaves nothing at all between the two files.

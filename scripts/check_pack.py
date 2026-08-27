@@ -100,8 +100,18 @@ def examine(engagement: dict[str, Any], period_end: str) -> bool:
     )
 
 
-async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]:
-    """The skill's order of operations, followed exactly."""
+async def gather(
+    client: Client, run_id: str, period_end: str, *, concurrency: int = 1
+) -> dict[str, Any]:
+    """The skill's order of operations, followed exactly.
+
+    ``concurrency`` is step 13's fan-out, and it bounds the detail leg only. Everything
+    above that leg is portfolio-scoped and already costs one call each; everything below
+    it is comparison, which a leg cannot do because legs cannot see each other. One is the
+    default and is byte-for-byte what this function did before step 13, because
+    check_format.py, check_publish.py and check_escalation.py all build their packs here
+    and none of them is a fan-out test.
+    """
 
     async def call(tool: str, **arguments: Any) -> dict[str, Any]:
         result = await client.call_tool(tool, {"run_id": run_id, **arguments})
@@ -143,13 +153,30 @@ async def gather(client: Client, run_id: str, period_end: str) -> dict[str, Any]
     )
 
     # 3 and 4. Detail only for the engagements that met a trigger.
+    #
+    # The two calls stay paired inside one leg rather than being flattened into a single
+    # wave of every burn call followed by every financials call. Pairing them is what makes
+    # a leg the unit of work an agent-side subagent would own, so the harness measures the
+    # shape the SKILL describes rather than a faster shape the SKILL does not.
     chosen = [e for e in engagements if examine(e, period_end)]
-    burn: dict[str, Any] = {}
-    financials: dict[str, Any] = {}
-    for engagement in chosen:
-        eid = engagement["engagement_id"]
-        burn[str(eid)] = await call("get_engagement_burn", engagement_id=eid, as_of_date=period_end)
-        financials[str(eid)] = await call("get_financials", engagement_id=eid, period=PERIOD)
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def detail(engagement: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        async with semaphore:
+            eid = engagement["engagement_id"]
+            return (
+                await call("get_engagement_burn", engagement_id=eid, as_of_date=period_end),
+                await call("get_financials", engagement_id=eid, period=PERIOD),
+            )
+
+    # gather returns in the order it was given regardless of the order things finished in,
+    # so the two dicts below are keyed in `chosen` order at any concurrency. That is not a
+    # tidiness point: pack.json is compared between the sequential and parallel runs, and
+    # dict order survives json.dumps, so completion order leaking in here would show up as
+    # a difference in a file that is supposed to prove there is none.
+    pairs = await asyncio.gather(*(detail(e) for e in chosen))
+    burn = {str(e["engagement_id"]): b for e, (b, _) in zip(chosen, pairs)}
+    financials = {str(e["engagement_id"]): f for e, (_, f) in zip(chosen, pairs)}
 
     return {
         "period": PERIOD,
@@ -192,6 +219,79 @@ def all_text(wb: Any) -> list[tuple[str, str, str]]:
                 if isinstance(cell.value, str):
                     found.append((ws.title, cell.coordinate, cell.value))
     return found
+
+
+def compare_workbooks(
+    left: Path,
+    right: Path,
+    ignore: dict[str, set[str]] | None = None,
+    aliases: dict[str, str] | None = None,
+) -> list[str]:
+    """Every difference between two workbooks, cell by cell. Empty means identical.
+
+    Step 13 needs this and a checksum will not do it. build_workbook.py opens a bare
+    Workbook() and never sets document properties, so openpyxl stamps dcterms:created with
+    the wall clock and writes current mtimes into every zip entry. Two byte-different files
+    are the normal case for one unchanged pack, and the question "is this the same workbook"
+    has to be asked of the cells instead.
+
+    Loaded without data_only, deliberately. Three columns in the engagement book are live
+    Excel formulas and Excel never runs here, so data_only would read the cached value —
+    None on a file openpyxl wrote — and quietly compare nothing at all on exactly the
+    columns most worth comparing. Without it, a formula compares as its text.
+
+    ``ignore`` maps a tab name to column headers whose cells are expected to differ, for the
+    one case where difference is correct: `situation`, `cause` and `recommended_action` on
+    Exceptions are written by the model, and two runs that agree on every flag can still
+    word them differently. Headers themselves are always compared, and so is a column named
+    in ``ignore`` that exists on one side and not the other — an ignored column may vary,
+    but it may not go missing.
+
+    ``aliases`` renames exact cell values on the right before comparing, and exists for the
+    run id. Summary stamps it, two runs cannot share one — step 12 requires a regenerated
+    pack to take a *new* id, so two workbooks carrying the same one would be the defect —
+    and every other cell still has to match literally. Exact values only, not substrings: a
+    run id inside a sentence should be reported and looked at rather than quietly rewritten.
+    """
+    ignore, aliases = ignore or {}, aliases or {}
+    left_wb, right_wb = load_workbook(left), load_workbook(right)
+    differences: list[str] = []
+
+    if left_wb.sheetnames != right_wb.sheetnames:
+        return [f"sheet names differ: {left_wb.sheetnames} vs {right_wb.sheetnames}"]
+
+    for name in left_wb.sheetnames:
+        a, b = left_wb[name], right_wb[name]
+        if (a.max_row, a.max_column) != (b.max_row, b.max_column):
+            differences.append(
+                f"{name}: {a.max_row}x{a.max_column} vs {b.max_row}x{b.max_column}"
+            )
+            continue
+
+        skip = {
+            index
+            for index, cell in enumerate(next(a.iter_rows(min_row=1, max_row=1)), start=1)
+            if str(cell.value) in ignore.get(name, set())
+        }
+
+        for row_a, row_b in zip(a.iter_rows(), b.iter_rows()):
+            for cell_a, cell_b in zip(row_a, row_b):
+                if cell_a.row > 1 and cell_a.column in skip:
+                    continue
+                value_b = aliases.get(cell_b.value, cell_b.value) if isinstance(
+                    cell_b.value, str
+                ) else cell_b.value
+                if cell_a.value != value_b:
+                    differences.append(
+                        f"{name}!{cell_a.coordinate}: {cell_a.value!r} vs {cell_b.value!r}"
+                    )
+                elif cell_a.number_format != cell_b.number_format:
+                    differences.append(
+                        f"{name}!{cell_a.coordinate}: format "
+                        f"{cell_a.number_format!r} vs {cell_b.number_format!r}"
+                    )
+
+    return differences
 
 
 def check_workbook(path: Path, pack: dict[str, Any], anchors: dict[str, Any], checks: Checks) -> None:
@@ -483,6 +583,13 @@ def check_skill_document(checks: Checks) -> None:
         ("`unchanged`", "what an untouched period returns"),
         ("`arrivals_complete: false`", "the limit of what the watermark can enumerate"),
         ("use a new run id", "that a regenerated pack does not reuse the run id"),
+        # Step 13. What makes the fan-out safe is the prohibition rather than the
+        # instruction, so the prohibition is what is checked. The third one guards against
+        # a future edit reading 4a as permission to fan out triage as well, which is the
+        # mistake this repo has now made three times.
+        ("one subagent per engagement", "the detail-leg fan-out"),
+        ("A leg returns raw tool responses and nothing else", "what a leg may hand back"),
+        ("not the fan-out step 4 warns about", "that triage fan-out is still refused"),
     ):
         checks.add(f"skill: states {what}", phrase in text, "present" if phrase in text else "absent")
 

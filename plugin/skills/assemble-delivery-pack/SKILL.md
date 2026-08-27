@@ -112,6 +112,45 @@ Every one of these six is a column on the `list_engagements` row precisely so th
 a tool call to evaluate it. **The filter can only fire on what the triage row carries**, which is
 why the row carries them.
 
+**4a. Fan the detail calls out, one subagent per engagement.**
+
+The union from step 4 is a list of independent engagements, and nothing about examining one of
+them depends on any other. Give each id in the union to its own subagent. A leg makes exactly two
+calls for its one engagement, passes this run's `run_id` to both, and hands back the two responses
+unaltered:
+
+```
+get_engagement_burn(engagement_id=<its id>, as_of_date=<period_end>)
+get_financials(engagement_id=<its id>, period=<period>)
+```
+
+**A leg returns raw tool responses and nothing else.** It must not compute a percentage, rank
+anything, compare its engagement against another, work out a median, produce any portfolio-level
+figure, or decide a flag. This is not a style preference: a leg cannot see the other legs, so any
+comparison made inside one is made against a fraction of the portfolio. Ten legs each computing
+"is this engagement above the median fee" produce up to ten different medians, all of them wrong,
+and the pack that results disagrees with itself in a way nobody reading it can see.
+
+Everything comparative therefore waits for assembly, where the whole portfolio is in one place:
+
+- **Portfolio totals and blended margin.** Already computed in SQL and returned in the `portfolio`
+  block of the first `list_engagements` call. Never assembled from the legs.
+- **The at-risk ranking.** `build_deck.py` sorts the examined set once, after every leg is back.
+- **The median fee.** `classify.py` computes it across the portfolio, once, for the concentration
+  rule. It is the only number that script works out, and it is there rather than in a leg for
+  exactly this reason.
+- **The coverage rule**, which was settled at step 3 from one portfolio-wide call and does not get
+  revisited per engagement.
+
+**This is not the fan-out step 4 warns about.** That one replaced the triage decision with thirty
+`get_engagement_burn` calls — paying per engagement to work out which engagements were worth
+looking at, a question one call already answers. This one is the calls to the engagements triage
+has *already chosen*. Triage stays one call; the detail leg is as wide as the union. The rule
+underneath both is the same: never call a tool to learn something the triage row already carries.
+
+If subagents are not available, make the same calls sequentially. The pack is identical either
+way — same tools, same arguments, same figures — and only the wall clock changes.
+
 **5. Everything else gets its summary figures and nothing more.** Detail you will not use is still
 detail you paid for. Do not call `get_engagement_burn` for all eighteen engagements to be thorough.
 
