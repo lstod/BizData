@@ -14,8 +14,9 @@ deployed on AWS behind Cognito and answering tool calls from a Cowork connector;
 produce the engagement book and the partner deck, to a format that does not vary; a finished pack
 lands in an S3 archive of record with its tool-call log and ledger beside it; a run ledger makes
 re-running a period a decision rather than an accident; the engagements chosen for a proper look
-are examined in parallel; and the whole thing installs as a plugin from this repository, which is
-its own marketplace.
+*can* be examined in parallel, though measuring it showed the win is small enough to be worth
+knowing about rather than switching on ([step 13](docs/notes/step-13-fanout.md)); and the whole
+thing installs as a plugin from this repository, which is its own marketplace.
 
 The security posture is in [SECURITY.md](SECURITY.md). What went wrong is further down, under
 [what broke](#what-broke), and it is the part worth reading.
@@ -390,7 +391,9 @@ proper look therefore cost a fan-out of thirty `get_engagement_burn` calls — t
 health band moved into SQL and onto the triage row, and triage went from thirty calls to one.
 
 Step 13 later added a fan-out of detail calls, which sounds like a reversal and is not: it examines
-the engagements triage has *already chosen*, in parallel, and triage is still one call. The rule
+the engagements triage has *already chosen*, in parallel, and triage is still one call. Measuring it
+in a real Cowork run found the model ignored the instruction and, more usefully, that tool calls are
+1.4% of such a run — so the fan-out is correct and nearly worthless at this size. The rule
 underneath both is the same — never call a tool to learn something the triage row already carries.
 `docs/notes/step-13-fanout.md` draws the line; `plugin/skills/assemble-delivery-pack/SKILL.md` step
 4a states it where a future edit would otherwise read the new section as permission.

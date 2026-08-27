@@ -1,0 +1,163 @@
+Step 13 -- the Cowork run
+Run id delivery-review-2026-08-r1, 2026-08-27 02:25-02:32 UTC, server 0.3.0+40daa1027e91,
+plugin 1.0.3 installed from the marketplace, Aurora seed 42 at max_capacity 1.0.
+
+The prompt was step 8's, unchanged, and names no skill, no threshold, no engagement, and --
+the whole point of this run -- no subagent and no parallelism:
+
+    Produce the August 2026 delivery review from the BizData connector. Use the delivery
+    review skills. Publish it and tell me what you found.
+
+
+================================================================================
+THE ANSWER: IT DID NOT FAN OUT
+================================================================================
+
+`SKILL.md` step 4a instructs one subagent per engagement over the union. The run made the
+right calls, in the right order, and produced a correct pack -- and it made every one of them
+serially.
+
+CloudWatch, filtered to this run id, offsets in ms from the first line:
+
+    +ms  tool                    eid   lat_ms   started at
+      0  list_engagements              1582.5        -1582
+   6303  get_time_summary               164.9         6138
+  29652  get_engagement_burn       2    120.8        29531
+  30494  get_engagement_burn       5    185.3        30309
+  31798  get_engagement_burn       8    160.3        31638
+  32521  get_engagement_burn       9     94.4        32427
+  33580  get_engagement_burn      12     91.7        33488
+  34629  get_engagement_burn      15     89.6        34539
+  35319  get_engagement_burn      19     91.3        35228
+  36014  get_engagement_burn      20     96.0        35918
+  37582  get_engagement_burn      22    121.5        37460
+  38194  get_engagement_burn      25    109.6        38084
+  41353  get_financials            2     90.0        41263
+  42816  get_financials            5     91.2        42725
+  43509  get_financials            8    118.8        43390
+  44167  get_financials            9     90.3        44077
+  44829  get_financials           12     90.1        44739
+  45709  get_financials           15     89.1        45620
+  47022  get_financials           19     86.0        46936
+  47718  get_financials           20     87.8        47630
+  48595  get_financials           22     85.8        48509
+  49206  get_financials           25    111.9        49094
+ 397704  publish_pack                   232.5       397472
+ 447432  publish_pack                  2262.6       445169
+
+24 lines, 6.34s of summed handler time across a 447s run.
+
+`started at` is the completion timestamp minus the handler's own latency. **Every call starts
+after the previous one has returned.** There is not one overlapping pair in the run. Compare
+the harness at concurrency 8, where the whole point is that wall clock lands below summed
+handler time; here they are the same number laid end to end.
+
+This is the artifact step 7's evidence wished it had. That step had to qualify its no-fan-out
+claim because it rested on the run's narration rather than a per-call log (commit 9ff1ff7).
+This one is measured, and it happens to measure the opposite of what was hoped for, which is
+the reason for measuring it.
+
+**It is not even leg-shaped.** Step 4a describes a leg as two calls for one engagement:
+get_engagement_burn and get_financials, paired, so the leg is the unit an agent could own. The
+run did ten burns and then ten financials -- tool-major, not engagement-major. So it did not
+read 4a and decline to parallelise; it organised the work along the other axis entirely, on
+which "one subagent per engagement" does not map onto anything. The instruction did not take.
+
+
+================================================================================
+AND IT WOULD HAVE SAVED ALMOST NOTHING
+================================================================================
+
+This is the more useful half, and it was not visible before this run.
+
+    total run, first call to finalize             447.4s
+    summed handler time, all 24 calls               6.3s     1.4% of the run
+    the detail leg, first burn to last financial   19.7s
+    summed handler time inside the detail leg       2.1s    10.7% of the leg
+
+The twenty detail calls average 105ms each and sit about 700-1300ms apart. The gaps are model
+turnaround, not database time. Inside the window step 13 set out to compress, nine parts in
+ten are the model deciding what to call next.
+
+So a perfect eight-way fan-out of that leg saves roughly 1.8 seconds out of 447 -- **0.4% of
+the run.** The 348-second gap between the last financial and the first publish_pack, which is
+classify.py, the two builders and the model's own writing, is on its own 175 times larger than
+everything fan-out could win.
+
+The harness numbers are not wrong and this does not retract them. 1.64x local and 1.45x on
+Aurora are real, and they are what the fan-out is worth *to the tool-call portion of a run*.
+This run measures how large that portion is when a model is driving instead of a script, and
+the answer is 1.4%. Both facts are needed to say anything true about the step:
+
+    the fan-out works, is safe, and is worth 1.45x of the 1.4% of a Cowork run that is
+    spent talking to the database
+
+Which reframes the cut-order line in the build plan. Step 13 sits first to be cut, and that
+was the right call for a better reason than the one written down: not because it is the least
+finished, but because on the path that actually ships it optimises the wrong thing. Worth
+knowing that it is safe and cheap to turn on the day a portfolio has 200 engagements rather
+than 18, and worth not believing it does anything today.
+
+
+================================================================================
+THE PACK IS CORRECT ANYWAY
+================================================================================
+
+Diffed against a harness workbook built from the same Aurora data by
+`check_escalation.py --backend aws --no-reseed --seed 42 --keep`, using the committed
+`check_pack.compare_workbooks` rather than by eye:
+
+    Summary        36 x 2    identical
+    Engagements    19 x 41   identical, formulas compared as text
+    Time Detail    76 x 10   identical
+    Exceptions      8 x 7    identical outside situation / cause / recommended_action / triggers
+    Data Quality   23 vs 24 rows  -- one row, explained below
+
+The single difference is the Data Quality arrival note:
+
+    "Not all of the change since the previous pack could be itemised. 3 entries added, of
+     which only 0 arrived after the previous watermark. The rest were filed with an earlier
+     timestamp and cannot be listed."
+
+`arrival_notes()` (build_workbook.py:524-566) emits that only on a `changed` decision. The
+Cowork run saw `changed`; the harness ran afterwards, by which point this run had published,
+so it saw `unchanged` and wrote no note. That is the exact sequencing hazard flagged before
+the step started, showing up in the one place it was expected to, and it confirms the
+mechanism rather than contradicting anything.
+
+Everything else held. Triage stayed one call -- a single `list_engagements` at limit=100, and
+no `get_engagement_burn` before the trigger lists. Ten of eighteen examined. No leg computed
+anything, trivially, there being no legs, and the portfolio figures trace to the sources they
+should: blended margin 60.8% and the totals from the `portfolio` block, the median-fee
+qualifier on engagement 12 from classify.py, the at-risk ranking from build_deck.py.
+
+The judgment behaviours from earlier steps all survived: the week of 2026-08-10 reported as a
+16.7% coverage artifact and never as a slowdown; engagement 25's low-confidence projection
+carrying its reason everywhere it appears; engagement 5's fixed-fee contradiction outranking
+the margin RED rule; engagement 12 flagged for concentration with no action recommended. The
+ledger stamps `server_version 0.3.0+40daa1027e91`, matching the checkout.
+
+
+================================================================================
+WHAT WOULD HAVE TO CHANGE
+================================================================================
+
+Not recorded as a to-do list -- the measurement above says the payoff is 0.4% -- but the run
+narrows why the instruction did not take, and that is worth having written down.
+
+Step 4a sits inside step 4, after the six trigger lists, as prose. Everything around it in
+that section is about *which* engagements to examine, and it is the only paragraph about *how*
+to make the calls. A model reading the section for its filter can take the whole thing as
+answered once the union is written out. The tool-major ordering it chose is the natural shape
+if you read step 4 as "collect the union, then get their burn, then get their financials",
+which is what the rest of the section reads like.
+
+The cheap experiments, in order of how much they would tell us: make 4a its own numbered step
+rather than a sub-step of the selection rule; state the leg as a two-call pair before
+mentioning subagents at all, since the pairing is the part it got wrong and the parallelism is
+downstream of it; and only then a prompt that names parallelism, which would answer whether
+the Skill can carry it or only the prompt can.
+
+None of these were tried. Tuning the prompt until it wins would produce a number about the
+prompt rather than about the Skill, and the runbook said so before the run for exactly this
+reason.
